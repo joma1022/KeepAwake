@@ -3,7 +3,9 @@
 แอปเล็กๆ กันไม่ให้ Mac หลับ พร้อมตัวจับเวลา — เหมาะกับตอนปล่อยงานทำทิ้งไว้ หรือกัน VPN หลุดตอนพักจอ
 ใช้ IOKit power assertion ของ macOS โดยตรง (in-process) — ปิดแอปเมื่อไหร่ระบบปล่อยให้อัตโนมัติ ไม่มีทางค้าง
 
-A tiny macOS menu app to keep your Mac awake with a timer — great for long-running tasks or keeping a VPN alive while the screen would otherwise sleep.
+A tiny macOS app to keep your Mac awake with a timer — great for long-running tasks or keeping a VPN alive while the screen would otherwise sleep.
+
+<p align="center"><img src="docs/screenshot.png" width="420" alt="KeepAwake screenshot"></p>
 
 ## ฟีเจอร์ / Features
 
