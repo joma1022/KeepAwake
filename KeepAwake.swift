@@ -146,6 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let dimAfterSeconds: Double = 300      // ไม่แตะเครื่อง 5 นาที -> หรี่จอ
     let dimLevel: Float = 0.05             // ระดับหรี่ (5%)
 
+    var updateButton: NSButton!
+    var isUpdating = false
     var currentAccent: AccentChoice = .green
     var accent: NSColor = AccentChoice.green.color
     var accentButtons: [NSButton] = []
@@ -214,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // ---------- UI ----------
     func buildWindow() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 700),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 480),
                          styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         w.title = "KeepAwake"
@@ -228,43 +230,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .centerX
-        root.spacing = 14
-        root.edgeInsets = NSEdgeInsets(top: 34, left: 22, bottom: 22, right: 22)
+        root.spacing = 9
+        root.edgeInsets = NSEdgeInsets(top: 28, left: 16, bottom: 16, right: 16)
         root.translatesAutoresizingMaskIntoConstraints = false
 
         // ===== การ์ดสถานะด้านบน =====
-        statusLabel = makeLabel("พร้อมใช้งาน", size: 34, bold: true)
-        statusLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 34, weight: .bold)
-        subLabel = makeLabel("กันไม่ให้ Mac หลับ", size: 12, bold: false)
+        statusLabel = makeLabel("พร้อมใช้งาน", size: 27, bold: true)
+        statusLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 27, weight: .bold)
+        subLabel = makeLabel("กันไม่ให้ Mac หลับ", size: 11, bold: false)
         subLabel.textColor = .secondaryLabelColor
-        headerBox = card([statusLabel, subLabel], spacing: 3, padding: 20)
+        headerBox = card([statusLabel, subLabel], spacing: 2, padding: 12)
         root.addArrangedSubview(headerBox)
 
         // ===== การ์ด: ตั้งเวลา =====
         customField = NSTextField(string: UserDefaults.standard.string(forKey: "customTime") ?? "120")
-        customField.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        customField.widthAnchor.constraint(equalToConstant: 62).isActive = true
         customField.alignment = .center
-        customField.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        customField.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        customField.placeholderString = "120"
         customField.target = self
         customField.action = #selector(startCustom)   // กด Enter ในช่อง = เริ่มทันที
+        customField.setContentHuggingPriority(.required, for: .horizontal)
+        customField.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let hint = makeLabel("เลข = นาที · เติม m = นาที · เติม h = ชั่วโมง", size: 10, bold: false)
+        let hint = makeLabel("เลข = นาที · m = นาที · h = ชั่วโมง", size: 10, bold: false)
         hint.textColor = .tertiaryLabelColor
+
+        // ช่องกำหนดเอง + ปุ่มต่อเวลา รวมเป็นแถวเดียว (ช่องกว้างคงที่ ที่เหลือแบ่งเท่ากัน)
+        let customRow = NSStackView(views: [
+            customField,
+            hstack([btn("ตั้งเวลา", #selector(startCustom)),
+                    btn("+15", #selector(add15)),
+                    btn("+30", #selector(add30))])
+        ])
+        customRow.orientation = .horizontal
+        customRow.spacing = 6
+        customRow.distribution = .fill
 
         let timeCard = card([
             sectionLabel("ตั้งเวลา"),
-            hstack([btn("30 นาที", #selector(start30)), btn("1 ชั่วโมง", #selector(start60))]),
-            hstack([btn("2 ชั่วโมง", #selector(start120)), btn("4 ชั่วโมง", #selector(start240))]),
-            hstack([btn("+15 นาที", #selector(add15)), btn("+30 นาที", #selector(add30))]),
-            hstack([customField, btn("กำหนดเอง", #selector(startCustom))]),
+            hstack([btn("30 นาที", #selector(start30)), btn("1 ชม.", #selector(start60)),
+                    btn("2 ชม.", #selector(start120)), btn("4 ชม.", #selector(start240))]),
+            customRow,
             hint,
-            btn("เปิดค้างไว้ (ไม่จับเวลา)", #selector(startInfinite)),
-            btn("จนกว่างานจะเสร็จ… (เลือกแอปที่เฝ้าดู)", #selector(pickWatchApp))
-        ], spacing: 8, padding: 14)
+            hstack([btn("เปิดค้างไว้", #selector(startInfinite)),
+                    btn("เฝ้าดูแอป…", #selector(pickWatchApp))])
+        ], spacing: 6, padding: 11)
         root.addArrangedSubview(timeCard)
 
         // ===== การ์ด: หน้าจอ & VPN =====
-        let vpnBtn = btn("กัน VPN หลุด — จอไม่ดับ", #selector(vpnMode))
+        let vpnBtn = btn("กัน VPN หลุด", #selector(vpnMode))
         vpnBtn.bezelColor = NSColor.systemBlue
         vpnBtn.contentTintColor = .white
 
@@ -272,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         screenCanSleep = (ud.object(forKey: "screenCanSleep") as? Bool) ?? true
         autoDimEnabled = ud.bool(forKey: "autoDim")
 
-        displayCheck = NSButton(checkboxWithTitle: "ให้จอดับได้ระหว่างทำงาน (ประหยัดไฟ)",
+        displayCheck = NSButton(checkboxWithTitle: "ให้จอดับได้ (ประหยัดไฟ)",
                                 target: self, action: #selector(toggleDisplay))
         displayCheck.state = screenCanSleep ? .on : .off
         autoDimCheck = NSButton(checkboxWithTitle: "หรี่จออัตโนมัติเมื่อไม่ได้ใช้ 5 นาที",
@@ -282,18 +297,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if autoDimEnabled { startTimer() }   // ให้เช็ค idle ตั้งแต่เปิดแอป
 
         lowBattEnabled = ud.bool(forKey: "stopOnLowBatt")
-        lowBattCheck = NSButton(checkboxWithTitle: "หยุดอัตโนมัติเมื่อใช้แบตและต่ำกว่า \(lowBattThreshold)%",
+        lowBattCheck = NSButton(checkboxWithTitle: "หยุดเองเมื่อใช้แบตต่ำกว่า \(lowBattThreshold)%",
                                 target: self, action: #selector(toggleLowBatt))
         lowBattCheck.state = lowBattEnabled ? .on : .off
 
         let screenCard = card([
             sectionLabel("หน้าจอ & VPN"),
-            vpnBtn,
+            hstack([vpnBtn, btn("ดับจอเดี๋ยวนี้", #selector(blankScreenNow))]),
             leftRow(displayCheck),
             leftRow(autoDimCheck),
-            leftRow(lowBattCheck),
-            btn("ดับจอเดี๋ยวนี้ (เครื่องทำงานต่อ)", #selector(blankScreenNow))
-        ], spacing: 8, padding: 14)
+            leftRow(lowBattCheck)
+        ], spacing: 6, padding: 11)
         root.addArrangedSubview(screenCard)
 
         // ===== การ์ด: สีธีม =====
@@ -304,21 +318,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             b.imagePosition = .imageOnly
             b.tag = i
             b.toolTip = c.label
-            b.widthAnchor.constraint(equalToConstant: 30).isActive = true
-            b.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            b.widthAnchor.constraint(equalToConstant: 26).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 26).isActive = true
             return b
         }
-        let colorRow = NSStackView(views: accentButtons)
+        let colorRow = NSStackView(views: [sectionLabel("สีธีม")] + accentButtons)
         colorRow.orientation = .horizontal
-        colorRow.spacing = 10
+        colorRow.alignment = .centerY
+        colorRow.spacing = 6
         colorRow.distribution = .equalSpacing
-        let colorCard = card([sectionLabel("สีธีม"), colorRow], spacing: 8, padding: 14)
+        let colorCard = card([colorRow], spacing: 0, padding: 9)
         root.addArrangedSubview(colorCard)
 
         // ===== ปุ่มหยุด =====
         stopButton = btn("หยุด", #selector(stopNow))
         stopButton.isEnabled = false
         root.addArrangedSubview(stopButton)
+
+        // ===== แถวล่าง: เวอร์ชันปัจจุบัน + ปุ่มตรวจสอบอัปเดต =====
+        let verLabel = makeLabel("KeepAwake v\(appVersion())", size: 10, bold: false)
+        verLabel.textColor = .tertiaryLabelColor
+        updateButton = NSButton(title: "ตรวจสอบอัปเดต", target: self, action: #selector(checkForUpdate))
+        updateButton.bezelStyle = .rounded
+        updateButton.controlSize = .small
+        updateButton.font = NSFont.systemFont(ofSize: 11)
+        let footer = NSStackView(views: [verLabel, updateButton])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.distribution = .equalSpacing
+        root.addArrangedSubview(footer)
+        footer.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
 
         let content = w.contentView!
         content.addSubview(root)
@@ -330,9 +359,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ])
         // ให้การ์ดกว้างเท่ากันทั้งหมด
         for c in [headerBox!, timeCard, screenCard, colorCard] {
-            c.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -44).isActive = true
+            c.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
         }
-        stopButton.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -44).isActive = true
+        stopButton.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
+
+        // ให้หน้าต่างสูงพอดีเนื้อหาจริง ไม่เหลือที่ว่างท้ายหน้าต่าง
+        content.layoutSubtreeIfNeeded()
+        let fitting = root.fittingSize
+        w.setContentSize(NSSize(width: 400, height: ceil(fitting.height)))
+        w.center()
         w.makeKeyAndOrderFront(nil)
     }
 
@@ -390,13 +425,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let b = NSButton(title: title, target: self, action: sel)
         b.bezelStyle = .rounded
         b.controlSize = .large
-        b.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 26).isActive = true
         return b
     }
     func hstack(_ views: [NSView]) -> NSStackView {
         let s = NSStackView(views: views)
         s.orientation = .horizontal
-        s.spacing = 8
+        s.spacing = 6
         s.distribution = .fillEqually
         return s
     }
@@ -432,46 +467,204 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateDockIcon(active: power.isActive)
     }
 
-    // ---------- ตรวจสอบเวอร์ชันใหม่บน GitHub ----------
-    @objc func checkForUpdate() {
-        let url = URL(string: "https://api.github.com/repos/joma1022/KeepAwake/releases/latest")!
-        var req = URLRequest(url: url)
-        req.setValue("KeepAwake-App", forHTTPHeaderField: "User-Agent")
-        let task = URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let self = self else { return }
-            guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = json["tag_name"] as? String else {
-                DispatchQueue.main.async { self.showUpdateAlert(available: false, latest: nil, url: nil) }
-                return
-            }
-            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-            let isNewer = Core.isNewerVersion(latest: tag, current: current)
-            let htmlURL = json["html_url"] as? String
-            DispatchQueue.main.async {
-                self.showUpdateAlert(available: isNewer, latest: isNewer ? tag : nil, url: htmlURL)
-            }
-        }
-        task.resume()
+    // ---------- อัปเดตอัตโนมัติจาก GitHub Releases ----------
+    // ขั้นตอน: เช็คเวอร์ชัน -> ถามผู้ใช้ -> โหลด .dmg -> เมานต์ -> สลับตัวแอป -> เปิดใหม่
+    // ทั้งหมดทำด้วยสิทธิ์ผู้ใช้ปกติ (แอปอยู่ ~/Applications) ไม่ต้องใส่รหัสผ่าน
+
+    let updateRepoAPI = "https://api.github.com/repos/joma1022/KeepAwake/releases/latest"
+
+    func appVersion() -> String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
     }
 
-    func showUpdateAlert(available: Bool, latest: String?, url: String?) {
+    func setUpdateBusy(_ busy: Bool, title: String = "ตรวจสอบอัปเดต") {
+        isUpdating = busy
+        updateButton?.isEnabled = !busy
+        updateButton?.title = title
+    }
+
+    func updateAlert(_ message: String, _ info: String, style: NSAlert.Style = .informational) {
         let a = NSAlert()
+        a.messageText = message
+        a.informativeText = info
+        a.alertStyle = style
+        a.addButton(withTitle: "ตกลง")
         NSApp.activate(ignoringOtherApps: true)
-        if available, let latest = latest {
-            a.messageText = "มีเวอร์ชันใหม่: \(latest)"
-            a.informativeText = "ต้องการเปิดหน้าดาวน์โหลดไหม"
-            a.addButton(withTitle: "เปิดหน้าดาวน์โหลด")
-            a.addButton(withTitle: "ปิด")
-            if a.runModal() == .alertFirstButtonReturn, let urlStr = url, let u = URL(string: urlStr) {
-                NSWorkspace.shared.open(u)
-            }
-        } else {
-            a.messageText = "คุณใช้เวอร์ชันล่าสุดแล้ว"
-            a.alertStyle = .informational
-            a.addButton(withTitle: "ตกลง")
-            a.runModal()
+        a.runModal()
+    }
+
+    @objc func checkForUpdate() {
+        guard !isUpdating else { return }
+        setUpdateBusy(true, title: "กำลังตรวจสอบ…")
+
+        var req = URLRequest(url: URL(string: updateRepoAPI)!)
+        req.setValue("KeepAwake-App", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 20
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, err in
+            guard let self = self else { return }
+            DispatchQueue.main.async { self.handleUpdateInfo(data: data, error: err) }
+        }.resume()
+    }
+
+    func handleUpdateInfo(data: Data?, error: Error?) {
+        setUpdateBusy(false)
+
+        guard let data = data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = json["tag_name"] as? String else {
+            updateAlert("ตรวจสอบอัปเดตไม่สำเร็จ",
+                        "เชื่อมต่อ GitHub ไม่ได้ — ตรวจอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง",
+                        style: .warning)
+            return
         }
+
+        let current = appVersion()
+        guard Core.isNewerVersion(latest: tag, current: current) else {
+            updateAlert("ใช้เวอร์ชันล่าสุดอยู่แล้ว", "เวอร์ชันปัจจุบัน v\(current)")
+            return
+        }
+
+        let htmlURL = json["html_url"] as? String
+        let assets = (json["assets"] as? [[String: Any]]) ?? []
+        let names = assets.compactMap { $0["name"] as? String }
+
+        // ไม่มี .dmg = ติดตั้งอัตโนมัติไม่ได้ -> เปิดหน้าดาวน์โหลดแทน
+        guard let pick = Core.pickUpdateAsset(names),
+              let assetURLStr = assets.first(where: { ($0["name"] as? String) == pick })?["browser_download_url"] as? String,
+              let assetURL = URL(string: assetURLStr) else {
+            offerOpenReleasePage(tag: tag, url: htmlURL,
+                                 reason: "รุ่นนี้ไม่มีไฟล์ .dmg สำหรับติดตั้งอัตโนมัติ")
+            return
+        }
+
+        // แอปต้องเขียนทับได้เอง ไม่งั้นต้องให้ผู้ใช้ติดตั้งเอง (กันไปขอรหัสผ่าน)
+        let appPath = Bundle.main.bundlePath
+        let parent = (appPath as NSString).deletingLastPathComponent
+        guard FileManager.default.isWritableFile(atPath: appPath),
+              FileManager.default.isWritableFile(atPath: parent) else {
+            offerOpenReleasePage(tag: tag, url: htmlURL,
+                                 reason: "แอปติดตั้งอยู่ในตำแหน่งที่ต้องใช้สิทธิ์ผู้ดูแล (\(parent))")
+            return
+        }
+
+        let a = NSAlert()
+        a.messageText = "มีเวอร์ชันใหม่: \(tag)"
+        a.informativeText = "ตอนนี้ใช้ v\(current)\n\nกด “อัปเดตเลย” เพื่อดาวน์โหลดและติดตั้งให้อัตโนมัติ — แอปจะปิดแล้วเปิดขึ้นมาใหม่เอง"
+        a.addButton(withTitle: "อัปเดตเลย")
+        a.addButton(withTitle: "เปิดหน้าดาวน์โหลด")
+        a.addButton(withTitle: "ไว้ทีหลัง")
+        NSApp.activate(ignoringOtherApps: true)
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            downloadAndInstall(assetURL)
+        case .alertSecondButtonReturn:
+            if let s = htmlURL, let u = URL(string: s) { NSWorkspace.shared.open(u) }
+        default:
+            break
+        }
+    }
+
+    func offerOpenReleasePage(tag: String, url: String?, reason: String) {
+        let a = NSAlert()
+        a.messageText = "มีเวอร์ชันใหม่: \(tag)"
+        a.informativeText = "\(reason)\nเปิดหน้าดาวน์โหลดเพื่อติดตั้งเองไหม"
+        a.addButton(withTitle: "เปิดหน้าดาวน์โหลด")
+        a.addButton(withTitle: "ไว้ทีหลัง")
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertFirstButtonReturn, let s = url, let u = URL(string: s) {
+            NSWorkspace.shared.open(u)
+        }
+    }
+
+    func downloadAndInstall(_ url: URL) {
+        setUpdateBusy(true, title: "กำลังดาวน์โหลด…")
+        var req = URLRequest(url: url)
+        req.setValue("KeepAwake-App", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 300
+
+        URLSession.shared.downloadTask(with: req) { [weak self] tmpURL, resp, err in
+            guard let self = self else { return }
+            // ต้องย้ายออกจาก tmp ทันที ระบบลบทิ้งเมื่อ closure จบ
+            var saved: URL?
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 200
+            if let tmpURL = tmpURL, code < 400 {
+                let dest = URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("KeepAwake-update.dmg")
+                try? FileManager.default.removeItem(at: dest)
+                if (try? FileManager.default.moveItem(at: tmpURL, to: dest)) != nil { saved = dest }
+            }
+            DispatchQueue.main.async {
+                guard let dmg = saved else {
+                    self.setUpdateBusy(false)
+                    self.updateAlert("ดาวน์โหลดไม่สำเร็จ",
+                                     "โหลดไฟล์อัปเดตไม่ได้ — ลองใหม่ หรือเปิดหน้าดาวน์โหลดเพื่อติดตั้งเอง",
+                                     style: .warning)
+                    return
+                }
+                self.installFromDMG(dmg)
+            }
+        }.resume()
+    }
+
+    /// สคริปต์ตัวช่วย: รอแอปปิด -> เมานต์ dmg -> สลับตัวแอป (มี rollback) -> เปิดใหม่
+    func installFromDMG(_ dmg: URL) {
+        setUpdateBusy(true, title: "กำลังติดตั้ง…")
+        let appPath = Bundle.main.bundlePath
+        let helper = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("keepawake-update.sh")
+
+        let script = """
+        #!/bin/bash
+        DMG="\(dmg.path)"
+        APP="\(appPath)"
+        MNT="$(mktemp -d)"
+        STAGE="$(mktemp -d)"
+
+        # รอแอปเดิมปิดสนิท (สูงสุด ~10 วินาที)
+        for i in $(seq 1 50); do
+          pgrep -f "$APP/Contents/MacOS/KeepAwake" >/dev/null 2>&1 || break
+          sleep 0.2
+        done
+
+        hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$MNT" || exit 1
+        NEW="$MNT/KeepAwake.app"
+
+        # ก๊อปออกจาก dmg ให้สำเร็จก่อน ค่อยแตะของเดิม — กันแอปหายถ้าไฟล์ที่โหลดมาเสีย
+        if [ -d "$NEW" ] && cp -R "$NEW" "$STAGE/KeepAwake.app"; then
+          rm -rf "$APP.old"
+          if mv "$APP" "$APP.old" 2>/dev/null; then
+            if mv "$STAGE/KeepAwake.app" "$APP" 2>/dev/null; then
+              rm -rf "$APP.old"
+            else
+              mv "$APP.old" "$APP"
+            fi
+          fi
+          xattr -dr com.apple.quarantine "$APP" 2>/dev/null
+        fi
+
+        hdiutil detach "$MNT" -quiet 2>/dev/null
+        rm -rf "$STAGE" "$MNT"
+        rm -f "$DMG"
+        open "$APP"
+        rm -f "$0"
+        """
+
+        do {
+            try script.write(to: helper, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            p.arguments = [helper.path]
+            try p.run()          // ทำงานต่อหลังแอปปิด
+        } catch {
+            setUpdateBusy(false)
+            updateAlert("ติดตั้งไม่สำเร็จ",
+                        "เตรียมตัวติดตั้งไม่ได้ — ลองเปิดหน้าดาวน์โหลดเพื่อติดตั้งเอง",
+                        style: .warning)
+            return
+        }
+        stop()                    // ปล่อย power assertion ให้เรียบร้อยก่อนปิด
+        NSApp.terminate(nil)
     }
 
     // ---------- ไอคอน Dock + เวลาที่เหลือ ----------

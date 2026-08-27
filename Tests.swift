@@ -78,6 +78,13 @@ check("มี v นำหน้า", Core.isNewerVersion(latest: "v1.3", current
 check("ความยาวไม่เท่ากัน (1.2.1 vs 1.2)", Core.isNewerVersion(latest: "1.2.1", current: "1.2"))
 check("ความยาวไม่เท่ากัน เท่ากันจริง (1.2.0 vs 1.2)", !Core.isNewerVersion(latest: "1.2.0", current: "1.2"))
 
+// ---------- pickUpdateAsset ----------
+print("pickUpdateAsset:")
+eq("เลือก .dmg", Core.pickUpdateAsset(["KeepAwake-Installer.pkg", "KeepAwake-Installer.dmg"]), "KeepAwake-Installer.dmg")
+check("ไม่มี .dmg -> nil", Core.pickUpdateAsset(["KeepAwake-Installer.pkg"]) == nil)
+check("ลิสต์ว่าง -> nil", Core.pickUpdateAsset([]) == nil)
+eq("นามสกุลตัวพิมพ์ใหญ่", Core.pickUpdateAsset(["A.DMG"]), "A.DMG")
+
 // ---------- สรุป ----------
 print("")
 print("ผ่าน \(passed) / \(passed + failed)")

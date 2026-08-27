@@ -68,4 +68,10 @@ enum Core {
         }
         return false
     }
+
+    /// เลือกไฟล์ติดตั้งจากรายชื่อ asset ของ release: เอา .dmg (อัปเดตอัตโนมัติได้ ไม่ต้องใส่รหัสผ่าน)
+    /// คืน nil ถ้าไม่มี .dmg — ให้ผู้เรียกเปิดหน้าดาวน์โหลดแทน
+    static func pickUpdateAsset(_ names: [String]) -> String? {
+        return names.first { $0.lowercased().hasSuffix(".dmg") }
+    }
 }
