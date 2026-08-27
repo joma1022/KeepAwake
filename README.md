@@ -28,6 +28,17 @@ A tiny macOS app to keep your Mac awake with a timer — great for long-running 
 
 เปิดครั้งต่อไป: Launchpad หรือ Spotlight (Command+Space พิมพ์ KeepAwake)
 
+
+### ติดตั้งผ่านไฟล์ .dmg (ง่ายกว่า)
+
+ถ้าไม่อยากคอมไพล์เอง โหลด `KeepAwake-Installer.dmg` จากหน้า [Releases](../../releases) แล้ว:
+
+1. ดับเบิลคลิกไฟล์ .dmg
+2. ลากไอคอน KeepAwake ไปวางที่โฟลเดอร์ Applications
+3. เปิดแอปจาก Launchpad หรือ Spotlight ได้เลย (ครั้งแรกถ้าโดนเตือนเรื่อง unidentified developer: คลิกขวา > Open)
+
+สร้างไฟล์ .dmg เองได้ด้วย `./build-dmg.sh` (ต้อง build หรือมี `KeepAwake.app` อยู่ก่อน)
+
 ## วิธีใช้ / Usage
 
 เปิดแอป เลือกเวลา หรือกดปุ่มสีน้ำเงิน "กัน VPN หลุด — จอไม่ดับ"
