@@ -89,6 +89,31 @@ enum Brightness {
     }
 }
 
+// ---------- สีธีมที่เลือกได้ ----------
+enum AccentChoice: String, CaseIterable {
+    case green, blue, purple, orange, pink, teal
+    var color: NSColor {
+        switch self {
+        case .green: return .systemGreen
+        case .blue: return .systemBlue
+        case .purple: return .systemPurple
+        case .orange: return .systemOrange
+        case .pink: return .systemPink
+        case .teal: return .systemTeal
+        }
+    }
+    var label: String {
+        switch self {
+        case .green: return "เขียว"
+        case .blue: return "ฟ้า"
+        case .purple: return "ม่วง"
+        case .orange: return "ส้ม"
+        case .pink: return "ชมพู"
+        case .teal: return "ฟ้าอมเขียว"
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var statusLabel: NSTextField!
@@ -121,13 +146,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let dimAfterSeconds: Double = 300      // ไม่แตะเครื่อง 5 นาที -> หรี่จอ
     let dimLevel: Float = 0.05             // ระดับหรี่ (5%)
 
-    let accent = NSColor.systemGreen
+    var currentAccent: AccentChoice = .green
+    var accent: NSColor = AccentChoice.green.color
+    var accentButtons: [NSButton] = []
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        loadAccentPreference()
         buildAppMenu()
         buildWindow()
         updateStatus()   // ตอนว่างใช้ไอคอนบันเดิล (.icns) — ไม่ override
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // ---------- สีธีม: โหลด/บันทึกค่าที่เลือก ----------
+    func loadAccentPreference() {
+        if let raw = UserDefaults.standard.string(forKey: "accentChoice"),
+           let c = AccentChoice(rawValue: raw) {
+            currentAccent = c
+        }
+        accent = currentAccent.color
     }
 
     // ปิดหน้าต่างแล้ว "ไม่ปิดแอป" — ทำงานต่อเบื้องหลัง
@@ -164,6 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let showItem = NSMenuItem(title: "แสดงหน้าต่าง KeepAwake", action: #selector(showWindow), keyEquivalent: "0")
         showItem.target = self
         appMenu.addItem(showItem)
+        appMenu.addItem(.separator())
+        let updateItem = NSMenuItem(title: "ตรวจสอบเวอร์ชันใหม่...", action: #selector(checkForUpdate), keyEquivalent: "")
+        updateItem.target = self
+        appMenu.addItem(updateItem)
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "ออกจากโปรแกรม KeepAwake",
                                    action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -255,6 +296,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ], spacing: 8, padding: 14)
         root.addArrangedSubview(screenCard)
 
+        // ===== การ์ด: สีธีม =====
+        accentButtons = AccentChoice.allCases.enumerated().map { i, c in
+            let b = NSButton(image: colorSwatchImage(c.color, selected: c == currentAccent),
+                              target: self, action: #selector(pickAccent(_:)))
+            b.isBordered = false
+            b.imagePosition = .imageOnly
+            b.tag = i
+            b.toolTip = c.label
+            b.widthAnchor.constraint(equalToConstant: 30).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            return b
+        }
+        let colorRow = NSStackView(views: accentButtons)
+        colorRow.orientation = .horizontal
+        colorRow.spacing = 10
+        colorRow.distribution = .equalSpacing
+        let colorCard = card([sectionLabel("สีธีม"), colorRow], spacing: 8, padding: 14)
+        root.addArrangedSubview(colorCard)
+
         // ===== ปุ่มหยุด =====
         stopButton = btn("หยุด", #selector(stopNow))
         stopButton.isEnabled = false
@@ -269,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             root.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
         // ให้การ์ดกว้างเท่ากันทั้งหมด
-        for c in [headerBox!, timeCard, screenCard] {
+        for c in [headerBox!, timeCard, screenCard, colorCard] {
             c.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -44).isActive = true
         }
         stopButton.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -44).isActive = true
@@ -339,6 +399,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         s.spacing = 8
         s.distribution = .fillEqually
         return s
+    }
+
+    // ---------- วงกลมสีตัวอย่างสำหรับปุ่มเลือกธีม ----------
+    func colorSwatchImage(_ color: NSColor, selected: Bool) -> NSImage {
+        let size = NSSize(width: 28, height: 28)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let rect = NSRect(x: 2, y: 2, width: 24, height: 24)
+        let path = NSBezierPath(ovalIn: rect)
+        color.setFill(); path.fill()
+        if selected {
+            NSColor.labelColor.setStroke()
+            path.lineWidth = 2.5
+            path.stroke()
+        }
+        img.unlockFocus()
+        return img
+    }
+
+    /// เลือกสีธีมใหม่: บันทึกค่า อัปเดตหน้าจอ/ไอคอน Dock ทันที
+    @objc func pickAccent(_ sender: NSButton) {
+        let choices = AccentChoice.allCases
+        guard sender.tag >= 0, sender.tag < choices.count else { return }
+        currentAccent = choices[sender.tag]
+        accent = currentAccent.color
+        UserDefaults.standard.set(currentAccent.rawValue, forKey: "accentChoice")
+        for (i, b) in accentButtons.enumerated() {
+            b.image = colorSwatchImage(choices[i].color, selected: choices[i] == currentAccent)
+        }
+        updateStatus()
+        updateDockIcon(active: power.isActive)
+    }
+
+    // ---------- ตรวจสอบเวอร์ชันใหม่บน GitHub ----------
+    @objc func checkForUpdate() {
+        let url = URL(string: "https://api.github.com/repos/joma1022/KeepAwake/releases/latest")!
+        var req = URLRequest(url: url)
+        req.setValue("KeepAwake-App", forHTTPHeaderField: "User-Agent")
+        let task = URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self = self else { return }
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String else {
+                DispatchQueue.main.async { self.showUpdateAlert(available: false, latest: nil, url: nil) }
+                return
+            }
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            let isNewer = Core.isNewerVersion(latest: tag, current: current)
+            let htmlURL = json["html_url"] as? String
+            DispatchQueue.main.async {
+                self.showUpdateAlert(available: isNewer, latest: isNewer ? tag : nil, url: htmlURL)
+            }
+        }
+        task.resume()
+    }
+
+    func showUpdateAlert(available: Bool, latest: String?, url: String?) {
+        let a = NSAlert()
+        NSApp.activate(ignoringOtherApps: true)
+        if available, let latest = latest {
+            a.messageText = "มีเวอร์ชันใหม่: \(latest)"
+            a.informativeText = "ต้องการเปิดหน้าดาวน์โหลดไหม"
+            a.addButton(withTitle: "เปิดหน้าดาวน์โหลด")
+            a.addButton(withTitle: "ปิด")
+            if a.runModal() == .alertFirstButtonReturn, let urlStr = url, let u = URL(string: urlStr) {
+                NSWorkspace.shared.open(u)
+            }
+        } else {
+            a.messageText = "คุณใช้เวอร์ชันล่าสุดแล้ว"
+            a.alertStyle = .informational
+            a.addButton(withTitle: "ตกลง")
+            a.runModal()
+        }
     }
 
     // ---------- ไอคอน Dock + เวลาที่เหลือ ----------

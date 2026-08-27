@@ -68,6 +68,16 @@ eq("idle ไม่ถึง -> เฉย", Core.dimAction(isDimmed: false, idleS
 eq("[เคยพัง] หรี่อยู่+ขยับเมาส์ -> คืนสว่าง", Core.dimAction(isDimmed: true, idleSeconds: 0.5, dimAfter: 300), "undim")
 eq("หรี่อยู่+ยัง idle -> คงหรี่", Core.dimAction(isDimmed: true, idleSeconds: 500, dimAfter: 300), "none")
 
+// ---------- isNewerVersion ----------
+print("isNewerVersion:")
+check("เวอร์ชันหลักใหม่กว่า", Core.isNewerVersion(latest: "2.0", current: "1.9"))
+check("เวอร์ชันรองใหม่กว่า", Core.isNewerVersion(latest: "1.3", current: "1.2"))
+check("เท่ากัน -> ไม่ใหม่กว่า", !Core.isNewerVersion(latest: "1.2", current: "1.2"))
+check("เก่ากว่า -> ไม่ใหม่กว่า", !Core.isNewerVersion(latest: "1.1", current: "1.2"))
+check("มี v นำหน้า", Core.isNewerVersion(latest: "v1.3", current: "1.2"))
+check("ความยาวไม่เท่ากัน (1.2.1 vs 1.2)", Core.isNewerVersion(latest: "1.2.1", current: "1.2"))
+check("ความยาวไม่เท่ากัน เท่ากันจริง (1.2.0 vs 1.2)", !Core.isNewerVersion(latest: "1.2.0", current: "1.2"))
+
 // ---------- สรุป ----------
 print("")
 print("ผ่าน \(passed) / \(passed + failed)")

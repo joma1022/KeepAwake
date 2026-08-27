@@ -51,4 +51,21 @@ enum Core {
         if isDimmed && idleSeconds < 2 { return "undim" }
         return "none"
     }
+
+    /// เทียบเวอร์ชันแบบ semver อย่างง่าย: latest ใหม่กว่า current ไหม (รองรับ "v" นำหน้า, เติม 0 ให้ความยาวไม่เท่ากัน)
+    static func isNewerVersion(latest: String, current: String) -> Bool {
+        func parts(_ s: String) -> [Int] {
+            var t = s
+            if t.hasPrefix("v") || t.hasPrefix("V") { t.removeFirst() }
+            return t.split(separator: ".").map { Int($0) ?? 0 }
+        }
+        let l = parts(latest), c = parts(current)
+        let n = max(l.count, c.count)
+        for i in 0..<n {
+            let lv = i < l.count ? l[i] : 0
+            let cv = i < c.count ? c[i] : 0
+            if lv != cv { return lv > cv }
+        }
+        return false
+    }
 }

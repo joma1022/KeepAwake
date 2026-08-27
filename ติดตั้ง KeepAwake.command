@@ -22,7 +22,11 @@ $1\" with title \"KeepAwake\" buttons {\"OK\"} default button \"OK\" with icon s
 # รัน unit tests ก่อนติดตั้ง (ถ้ามี) — เทสต์พัง = ไม่ติดตั้ง
 if [ -f "$DIR/Tests.swift" ]; then
     echo "กำลังรันเทสต์..."
-    /usr/bin/xcrun swift "$CORE" "$DIR/Tests.swift" || fail "unit tests ไม่ผ่าน — ยกเลิกการติดตั้ง"
+    # ต่อไฟล์เป็นไฟล์เดียวก่อนรัน — xcrun swift แบบหลายไฟล์ไม่เสถียรบน toolchain บางเวอร์ชัน
+    TMP_TEST="$(mktemp -t keepawaketest).swift"
+    cat "$CORE" "$DIR/Tests.swift" > "$TMP_TEST"
+    /usr/bin/xcrun swift "$TMP_TEST" || { rm -f "$TMP_TEST"; fail "unit tests ไม่ผ่าน — ยกเลิกการติดตั้ง"; }
+    rm -f "$TMP_TEST"
 fi
 /usr/bin/xcrun --find swiftc >/dev/null 2>&1 || fail "ไม่พบ Swift compiler — รัน: xcode-select --install แล้วลองใหม่"
 
@@ -76,8 +80,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>KeepAwake</string>
     <key>CFBundleDisplayName</key><string>KeepAwake</string>
     <key>CFBundleIdentifier</key><string>local.keepawake.app</string>
-    <key>CFBundleVersion</key><string>1.2</string>
-    <key>CFBundleShortVersionString</key><string>1.2</string>
+    <key>CFBundleVersion</key><string>1.3</string>
+    <key>CFBundleShortVersionString</key><string>1.3</string>
     <key>CFBundleExecutable</key><string>KeepAwake</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
