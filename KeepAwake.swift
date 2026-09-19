@@ -114,6 +114,16 @@ enum AccentChoice: String, CaseIterable {
     }
 }
 
+// NSView ธรรมดาที่ callback ได้เมื่อ light/dark mode เปลี่ยน — ใช้แก้บั๊ก .cgColor ค้างสี
+// (การแปลง NSColor แบบ dynamic เป็น .cgColor คือ snapshot ตอนแปลง ไม่ตามระบบสลับ dark mode เอง)
+final class AppearanceAwareView: NSView {
+    var onAppearanceChange: (() -> Void)?
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var statusLabel: NSTextField!
@@ -240,6 +250,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         subLabel = makeLabel("กันไม่ให้ Mac หลับ", size: 11, bold: false)
         subLabel.textColor = .secondaryLabelColor
         headerBox = card([statusLabel, subLabel], spacing: 2, padding: 12)
+        // headerBox มีสีตามสถานะ (active/ไม่ active) ไม่ใช่สีการ์ดปกติ -> ให้ updateStatus คุมสีเองตอน appearance เปลี่ยน
+        (headerBox as? AppearanceAwareView)?.onAppearanceChange = { [weak self] in self?.updateStatus() }
         root.addArrangedSubview(headerBox)
 
         // ===== การ์ด: ตั้งเวลา =====
@@ -373,13 +385,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// กล่องการ์ดพื้นหลังโค้งมน
     func card(_ views: [NSView], spacing: CGFloat, padding: CGFloat) -> NSView {
-        let box = NSView()
+        let box = AppearanceAwareView()
         box.wantsLayer = true
         box.layer?.cornerRadius = 12
-        box.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         box.layer?.borderWidth = 1
-        box.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
         box.translatesAutoresizingMaskIntoConstraints = false
+        func applyDefaultColors() {
+            box.effectiveAppearance.performAsCurrentDrawingAppearance {
+                box.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+                box.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+            }
+        }
+        applyDefaultColors()
+        box.onAppearanceChange = applyDefaultColors
 
         let s = NSStackView(views: views)
         s.orientation = .vertical
@@ -730,13 +748,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             subLabel.stringValue = screenCanSleep ? "จอดับได้ • เครื่องไม่หลับ" : "จอไม่ดับ • เครื่องไม่หลับ"
             setDockBadge(badgeText(rem))
         }
-        // การ์ดสถานะเปลี่ยนสีตามสถานะ
-        headerBox?.layer?.backgroundColor = active
-            ? accent.withAlphaComponent(0.12).cgColor
-            : NSColor.controlBackgroundColor.cgColor
-        headerBox?.layer?.borderColor = active
-            ? accent.withAlphaComponent(0.45).cgColor
-            : NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        // การ์ดสถานะเปลี่ยนสีตามสถานะ (ห่อด้วย performAsCurrentDrawingAppearance กัน .cgColor ค้างสีตอนสลับ dark/light)
+        headerBox?.effectiveAppearance.performAsCurrentDrawingAppearance {
+            headerBox?.layer?.backgroundColor = active
+                ? accent.withAlphaComponent(0.12).cgColor
+                : NSColor.controlBackgroundColor.cgColor
+            headerBox?.layer?.borderColor = active
+                ? accent.withAlphaComponent(0.45).cgColor
+                : NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        }
         stopButton?.isEnabled = active
         stopButton?.bezelColor = active ? NSColor.systemRed : nil
     }
