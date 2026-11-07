@@ -103,6 +103,25 @@ eq("เหลือไม่ถึงนาที", Core.menuBarText(5), "1 น.
 eq("3599 วินาทีไม่แสดง 60 น.", Core.menuBarText(3599), "1:00")
 eq("ค่าติดลบ", Core.menuBarText(-3), "1 น.")
 
+// ---------- checksum ของไฟล์อัปเดต ----------
+print("checksum:")
+let hashABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+eq("sha256 ของ abc", Core.sha256Hex(Data("abc".utf8)), hashABC)
+eq("sha256 ของข้อมูลว่าง", Core.sha256Hex(Data()), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+eq("รูปแบบ shasum", Core.parseChecksum("\(hashABC)  A.dmg\n", fileName: "A.dmg"), hashABC)
+eq("รูปแบบ binary (*)", Core.parseChecksum("\(hashABC) *A.dmg", fileName: "A.dmg"), hashABC)
+eq("มีแต่ค่า hash", Core.parseChecksum("\(hashABC)\n", fileName: "A.dmg"), hashABC)
+eq("ตัวพิมพ์ใหญ่แปลงเป็นเล็ก", Core.parseChecksum(hashABC.uppercased(), fileName: "A.dmg"), hashABC)
+check("ชื่อไฟล์ไม่ตรง -> nil", Core.parseChecksum("\(hashABC)  B.dmg", fileName: "A.dmg") == nil)
+check("hash สั้นเกิน -> nil", Core.parseChecksum("abc123  A.dmg", fileName: "A.dmg") == nil)
+check("ไม่ใช่เลขฐานสิบหก -> nil", Core.parseChecksum(String(repeating: "z", count: 64), fileName: "A.dmg") == nil)
+check("ข้อความว่าง -> nil", Core.parseChecksum("", fileName: "A.dmg") == nil)
+check("หน้า HTML -> nil", Core.parseChecksum("<html>Not Found</html>", fileName: "A.dmg") == nil)
+eq("เลือกไฟล์ checksum ของ dmg", Core.pickChecksumAsset(["A.dmg", "A.pkg", "A.dmg.sha256"], for: "A.dmg"), "A.dmg.sha256")
+check("ไม่มีไฟล์ checksum -> nil", Core.pickChecksumAsset(["A.dmg", "A.pkg"], for: "A.dmg") == nil)
+check("checksum ของไฟล์อื่นไม่นับ", Core.pickChecksumAsset(["B.dmg.sha256"], for: "A.dmg") == nil)
+eq("ไฟล์ .sha256 ไม่ถูกเลือกเป็นตัวติดตั้ง", Core.pickUpdateAsset(["A.dmg.sha256", "A.dmg"]), "A.dmg")
+
 // ---------- สรุป ----------
 print("")
 print("ผ่าน \(passed) / \(passed + failed)")
