@@ -1,6 +1,6 @@
-// KeepAwake — หน้าต่างควบคุม กันไม่ให้ Mac หลับ (Swift / AppKit)
-// ฟีเจอร์: ปุ่มเลือกเวลา, ต่อเวลา +15/+30, นับถอยหลังสด, สลับจอดับ/จอติด,
-//          ไอคอน Dock เอง + แสดงเวลาที่เหลือบน Dock
+// KeepAwake — แผงควบคุมกันไม่ให้ Mac หลับ (Swift / AppKit)
+// หน้าจอ: แผงเดียวกันเปิดได้จากเมนูบาร์ (popover) และจาก Dock (หน้าต่าง)
+// ต้องมีหน้าต่างไว้เสมอ: จอมีรอยบากที่แถบเมนูเต็ม ระบบจะไม่แสดงไอคอนเมนูบาร์ใหม่
 import Cocoa
 import CoreGraphics
 import IOKit.pwr_mgt
@@ -114,69 +114,541 @@ enum AccentChoice: String, CaseIterable {
     }
 }
 
-// NSView ธรรมดาที่ callback ได้เมื่อ light/dark mode เปลี่ยน — ใช้แก้บั๊ก .cgColor ค้างสี
-// (การแปลง NSColor แบบ dynamic เป็น .cgColor คือ snapshot ตอนแปลง ไม่ตามระบบสลับ dark mode เอง)
-final class AppearanceAwareView: NSView {
-    var onAppearanceChange: (() -> Void)?
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        onAppearanceChange?()
+// ---------- ส่วนประกอบหน้าจอ ----------
+// ทุกอย่างวาดใน draw(_:) ด้วยสีแบบ dynamic ระบบจึงวาดใหม่เองตอนสลับ light/dark
+// (ไม่ใช้ layer + .cgColor ซึ่งเป็น snapshot และเคยทำให้การ์ดค้างสีขาวใน dark mode)
+
+/// วงแหวนเวลา
+final class RingView: NSView {
+    var progress: CGFloat = 0 { didSet { if progress != oldValue { needsDisplay = true } } }
+    var color: NSColor = .systemGreen { didSet { needsDisplay = true } }
+    let lineWidth: CGFloat = 9
+
+    override func draw(_ dirtyRect: NSRect) {
+        let inset = lineWidth / 2 + 1
+        let rect = bounds.insetBy(dx: inset, dy: inset)
+        let track = NSBezierPath(ovalIn: rect)
+        track.lineWidth = lineWidth
+        NSColor.quaternaryLabelColor.setStroke()
+        track.stroke()
+        guard progress > 0 else { return }
+        let arc = NSBezierPath()
+        arc.appendArc(withCenter: NSPoint(x: rect.midX, y: rect.midY), radius: rect.width / 2,
+                      startAngle: 90, endAngle: 90 - 360 * min(progress, 1), clockwise: true)
+        arc.lineWidth = lineWidth
+        arc.lineCapStyle = .round
+        color.setStroke()
+        arc.stroke()
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+enum ChipStyle { case neutral, danger, tinted(NSColor) }
+
+/// ปุ่มพื้นเรียบ ใช้ทุกปุ่มในแผง (ปุ่มระบบเล็กเกินสำหรับแผงนี้ และกำหนดสีพื้นตามสถานะไม่ได้เท่าที่ต้องการ)
+final class Chip: NSButton {
+    private var style: ChipStyle = .neutral
+    var fontSize: CGFloat = 12.5 { didSet { needsDisplay = true } }
+    private var handler: (() -> Void)?
+    private var hovering = false { didSet { needsDisplay = true } }
+
+    convenience init(_ title: String, style: ChipStyle = .neutral, height: CGFloat = 32,
+                     handler: @escaping () -> Void) {
+        self.init(frame: .zero)
+        self.title = title
+        self.style = style
+        self.handler = handler
+        isBordered = false
+        target = self
+        action = #selector(fire)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: height).isActive = true
+    }
+    @objc private func fire() { handler?() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let pressed = isHighlighted
+        let fill: NSColor
+        var text: NSColor
+        var weight = NSFont.Weight.regular
+        switch style {
+        case .neutral:
+            fill = NSColor.labelColor.withAlphaComponent(pressed ? 0.16 : hovering ? 0.11 : 0.07)
+            text = .labelColor
+        case .danger:
+            fill = NSColor.systemRed.withAlphaComponent(pressed ? 0.75 : hovering ? 0.88 : 1)
+            text = .white
+            weight = .semibold
+        case .tinted(let c):
+            fill = c.withAlphaComponent(pressed ? 0.30 : hovering ? 0.24 : 0.16)
+            text = .labelColor
+        }
+        if !isEnabled { text = .tertiaryLabelColor }
+        fill.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+        let s = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: weight),
+            .foregroundColor: text
+        ])
+        let size = s.size()
+        s.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+    }
+}
+
+/// ปุ่มไอคอนเล็ก (มี toolTip และชื่อสำหรับ VoiceOver)
+final class IconButton: NSButton {
+    private var handler: (() -> Void)?
+    convenience init(symbol: String, label: String, handler: @escaping () -> Void) {
+        self.init(frame: .zero)
+        self.handler = handler
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        imagePosition = .imageOnly
+        isBordered = false
+        contentTintColor = .secondaryLabelColor
+        toolTip = label
+        target = self
+        action = #selector(fire)
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: 28).isActive = true
+        heightAnchor.constraint(equalToConstant: 28).isActive = true
+    }
+    @objc private func fire() { handler?() }
+}
+
+/// ปุ่มเลือกสีธีม
+final class SwatchButton: NSButton {
+    private let color: NSColor
+    private let selected: Bool
+    private let handler: () -> Void
+    init(color: NSColor, name: String, selected: Bool, handler: @escaping () -> Void) {
+        self.color = color; self.selected = selected; self.handler = handler
+        super.init(frame: .zero)
+        isBordered = false
+        title = ""
+        toolTip = name
+        setAccessibilityLabel(name)
+        target = self
+        action = #selector(fire)
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: 30).isActive = true
+        heightAnchor.constraint(equalToConstant: 30).isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError("ไม่ได้ใช้") }
+    @objc private func fire() { handler() }
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: 6, dy: 6)).fill()
+        if selected {
+            NSColor.labelColor.setStroke()
+            let ring = NSBezierPath(ovalIn: bounds.insetBy(dx: 2, dy: 2))
+            ring.lineWidth = 2
+            ring.stroke()
+        }
+    }
+}
+
+func panelLabel(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular,
+                color: NSColor = .labelColor, align: NSTextAlignment = .center) -> NSTextField {
+    let l = NSTextField(labelWithString: s)
+    l.font = NSFont.systemFont(ofSize: size, weight: weight)
+    l.textColor = color
+    l.alignment = align
+    return l
+}
+
+func chipRow(_ views: [NSView]) -> NSStackView {
+    let s = NSStackView(views: views)
+    s.orientation = .horizontal
+    s.distribution = .fillEqually
+    s.spacing = 6
+    return s
+}
+
+func flexibleSpace() -> NSView {
+    let v = NSView()
+    v.setContentHuggingPriority(.init(1), for: .horizontal)
+    v.setContentHuggingPriority(.init(1), for: .vertical)
+    return v
+}
+
+// ---------- แผงควบคุม ----------
+// ใช้แบบเดียวกันสองที่: popover จากเมนูบาร์ และหน้าต่างจาก Dock
+// สถานะจริงอยู่ที่ AppDelegate ทั้งหมด แผงแค่แสดงผล จึงตรงกันเสมอ
+final class PanelController: NSViewController, NSTextFieldDelegate {
+    static let width: CGFloat = 300
+    static let contentHeight: CGFloat = 334
+
+    private unowned let app: AppDelegate
+    private let topInset: CGFloat
+    var showingSettings = false
+    private var editingCustom = false
+    private var customText = UserDefaults.standard.string(forKey: "customTime") ?? "120"
+
+    private var ring: RingView?
+    private var bigLabel: NSTextField?
+    private var smallLabel: NSTextField?
+    private var statusLine: NSTextField?
+    private weak var customField: NSTextField?
+    private var builtKey: String?
+    private var rebuildQueued = false
+
+    init(app: AppDelegate, topInset: CGFloat) {
+        self.app = app
+        self.topInset = topInset
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("ไม่ได้ใช้") }
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.contentHeight + topInset))
+        rebuild()
+    }
+
+    /// เรียกทุกครั้งที่สถานะเปลี่ยน และทุกวินาทีตอนนับเวลา: ปกติแก้แค่ตัวเลข สร้างปุ่มใหม่เมื่อโครงสร้างเปลี่ยน
+    func refresh() {
+        guard isViewLoaded else { return }
+        if app.power.isActive { editingCustom = false }
+        if structureKey() != builtKey { queueRebuild() }
+        refreshTexts()
+    }
+
+    private func structureKey() -> String {
+        [String(showingSettings), String(editingCustom), app.modeKey, String(app.effectiveScreenCanSleep),
+         app.currentAccent.rawValue, app.updateTitle, String(app.isUpdating),
+         String(app.autoDimEnabled), String(app.lowBattEnabled)].joined(separator: "|")
+    }
+
+    // ปุ่มที่กดอยู่อาจถูกแทนที่ระหว่างทำงาน จึงเลื่อนการสร้างใหม่ไปหลัง action จบ
+    private func queueRebuild() {
+        guard !rebuildQueued else { return }
+        rebuildQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.rebuildQueued = false
+            self.rebuild()
+        }
+    }
+
+    private func rebuild() {
+        if let f = customField { customText = f.stringValue }
+        builtKey = structureKey()
+        view.subviews.forEach { $0.removeFromSuperview() }
+        ring = nil; bigLabel = nil; smallLabel = nil; statusLine = nil
+        let root = showingSettings ? buildSettings() : buildMain()
+        root.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            root.topAnchor.constraint(equalTo: view.topAnchor, constant: topInset),
+            root.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12)
+        ])
+        refreshTexts()
+        if editingCustom { view.window?.makeFirstResponder(customField) }
+    }
+
+    private func refreshTexts() {
+        guard let ring = ring, let big = bigLabel, let small = smallLabel, let status = statusLine else { return }
+        let t = app.ringDisplay(editing: editingCustom)
+        ring.progress = t.progress
+        ring.color = t.color
+        big.stringValue = t.big
+        big.font = NSFont.monospacedDigitSystemFont(ofSize: t.big.count > 7 ? 20 : 25, weight: .semibold)
+        small.stringValue = t.small
+        status.stringValue = t.status
+        status.toolTip = t.status
+    }
+
+    private func set(editing: Bool) {
+        editingCustom = editing
+        queueRebuild()
+        refreshTexts()
+    }
+
+    // ---------- หน้าหลัก ----------
+    private func buildMain() -> NSStackView {
+        let r = RingView()
+        r.color = app.accent
+        r.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([r.widthAnchor.constraint(equalToConstant: 148),
+                                     r.heightAnchor.constraint(equalToConstant: 148)])
+        let big = panelLabel("", size: 25, weight: .semibold)
+        let small = panelLabel("", size: 11, color: .secondaryLabelColor)
+        let center = NSStackView(views: [big, small])
+        center.orientation = .vertical
+        center.spacing = 1
+        center.translatesAutoresizingMaskIntoConstraints = false
+        r.addSubview(center)
+        NSLayoutConstraint.activate([center.centerXAnchor.constraint(equalTo: r.centerXAnchor),
+                                     center.centerYAnchor.constraint(equalTo: r.centerYAnchor)])
+        ring = r; bigLabel = big; smallLabel = small
+
+        let status = panelLabel("", size: 11.5, color: .secondaryLabelColor)
+        status.lineBreakMode = .byTruncatingTail
+        status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusLine = status
+
+        let rows = actionRows()
+        let actions = NSStackView(views: rows)
+        actions.orientation = .vertical
+        actions.spacing = 6
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        actions.heightAnchor.constraint(equalToConstant: 108).isActive = true
+        rows.forEach { $0.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true }
+
+        let sw = NSSwitch()
+        sw.controlSize = .small
+        sw.state = app.effectiveScreenCanSleep ? .on : .off
+        sw.isEnabled = !app.vpnActive               // โหมด VPN บังคับจอไม่ดับ
+        sw.target = self
+        sw.action = #selector(toggleScreen(_:))
+        sw.setAccessibilityLabel("ให้จอดับได้")
+        let swLabel = panelLabel(app.vpnActive ? "จอไม่ดับระหว่างกัน VPN" : "ให้จอดับได้", size: 12.5)
+        swLabel.toolTip = "จอดับได้เพื่อประหยัดไฟ แต่เครื่องยังทำงานต่อ"
+
+        let footer = NSStackView(views: [
+            sw, swLabel, flexibleSpace(),
+            IconButton(symbol: "moon", label: "ดับจอเดี๋ยวนี้") { [weak self] in self?.app.blankScreenNow() },
+            IconButton(symbol: "gearshape", label: "ตั้งค่า") { [weak self] in
+                self?.showingSettings = true
+                self?.queueRebuild()
+            }
+        ])
+        footer.orientation = .horizontal
+        footer.spacing = 6
+
+        let root = NSStackView(views: [r, status, actions, footer])
+        root.orientation = .vertical
+        root.alignment = .centerX
+        root.spacing = 10
+        root.setCustomSpacing(6, after: r)
+        root.setCustomSpacing(12, after: status)
+        root.setCustomSpacing(8, after: actions)
+        for v in [status, actions, footer] as [NSView] {
+            v.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        }
+        return root
+    }
+
+    private func actionRows() -> [NSView] {
+        let a = app
+        func start(_ title: String, _ secs: Int, h: CGFloat = 29) -> Chip {
+            Chip(title, height: h) { a.launch(seconds: secs, isInfinite: false) }
+        }
+        func infinite(h: CGFloat = 29) -> Chip { Chip("ไม่จำกัด", height: h) { a.startInfinite() } }
+        func vpn(h: CGFloat = 29) -> Chip {
+            Chip("กัน VPN หลุด", style: .tinted(.systemBlue), height: h) { a.vpnMode() }
+        }
+        func watch(h: CGFloat = 29) -> Chip { Chip("เฝ้าดูแอป…", height: h) { a.pickWatchApp() } }
+        let stop = { Chip("หยุด", style: .danger, height: 38) { a.stopNow() } }
+        let quick = { chipRow([start("30 น.", 1800), start("1 ชม.", 3600), start("2 ชม.", 7200)]) }
+
+        if editingCustom {
+            return [chipRow([start("30 น.", 1800, h: 32), start("1 ชม.", 3600, h: 32), start("2 ชม.", 7200, h: 32)]),
+                    chipRow([start("4 ชม.", 14400, h: 32), infinite(h: 32),
+                             Chip("ยกเลิก") { [weak self] in self?.set(editing: false) }]),
+                    customRow()]
+        }
+        switch a.modeKey {
+        case "timed":
+            return [stop(),
+                    chipRow([Chip("+15 น.", height: 29) { a.extend(900) },
+                             Chip("+30 น.", height: 29) { a.extend(1800) },
+                             Chip("+1 ชม.", height: 29) { a.extend(3600) }]),
+                    chipRow([infinite(), vpn()])]
+        case "infinite":
+            return [stop(), quick(), chipRow([vpn(), watch()])]
+        case "vpn":
+            return [stop(), quick(), chipRow([infinite(), watch()])]
+        case "watch":
+            return [stop(), quick(), chipRow([infinite(), vpn()])]
+        default:
+            return [chipRow([start("30 น.", 1800, h: 32), start("1 ชม.", 3600, h: 32), start("2 ชม.", 7200, h: 32)]),
+                    chipRow([start("4 ชม.", 14400, h: 32), infinite(h: 32),
+                             Chip("กำหนดเอง") { [weak self] in self?.set(editing: true) }]),
+                    chipRow([vpn(h: 32), watch(h: 32)])]
+        }
+    }
+
+    private func customRow() -> NSView {
+        let field = NSTextField(string: customText)
+        field.placeholderString = "90, 45m, 2h"
+        field.alignment = .center
+        field.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        // ห้ามใช้ target/action: ช่องกรอกจะยิง action ตอนเสียโฟกัสด้วย ทำให้กด "ยกเลิก" แล้วเริ่มจับเวลาเอง
+        field.delegate = self
+        field.setAccessibilityLabel("เวลาที่กำหนดเอง")
+        customField = field
+        let go = Chip("เริ่ม", style: .tinted(app.accent)) { [weak self] in self?.startCustom() }
+        go.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        let s = NSStackView(views: [field, go])
+        s.orientation = .horizontal
+        s.spacing = 6
+        return s
+    }
+
+    // Enter = เริ่ม, Esc = ยกเลิก
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)):
+            startCustom()
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            set(editing: false)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func startCustom() {
+        guard let f = customField else { return }
+        customText = f.stringValue
+        if app.startCustom(f.stringValue) { editingCustom = false; refresh() }
+    }
+
+    @objc private func toggleScreen(_ s: NSSwitch) { app.setScreenCanSleep(s.state == .on) }
+
+    // ---------- หน้าตั้งค่า ----------
+    private func buildSettings() -> NSStackView {
+        let a = app
+        let back = IconButton(symbol: "chevron.left", label: "กลับ") { [weak self] in
+            self?.showingSettings = false
+            self?.queueRebuild()
+        }
+        let head = NSStackView(views: [back, panelLabel("ตั้งค่า", size: 14, weight: .semibold), flexibleSpace()])
+        head.orientation = .horizontal
+        head.spacing = 4
+
+        let colorRow = NSStackView(views: AccentChoice.allCases.map { c in
+            SwatchButton(color: c.color, name: c.label, selected: c == a.currentAccent) { a.pickAccent(c) }
+        })
+        colorRow.orientation = .horizontal
+        colorRow.distribution = .equalSpacing
+
+        let dim = settingRow("หรี่จออัตโนมัติเมื่อไม่ได้ใช้ 5 นาที", on: a.autoDimEnabled,
+                             enabled: Brightness.available, #selector(toggleDim(_:)))
+        let batt = settingRow("หยุดเองเมื่อใช้แบตต่ำกว่า \(a.lowBattThreshold)%", on: a.lowBattEnabled,
+                              enabled: true, #selector(toggleBatt(_:)))
+
+        let upd = Chip(a.updateTitle, height: 26) { a.checkForUpdate() }
+        upd.isEnabled = !a.isUpdating
+        upd.fontSize = 11.5
+        upd.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        let verRow = NSStackView(views: [
+            panelLabel("KeepAwake v\(a.appVersion())", size: 11, color: .tertiaryLabelColor),
+            flexibleSpace(), upd
+        ])
+        verRow.orientation = .horizontal
+
+        let quit = Chip("ออกจากโปรแกรม", height: 30) { NSApp.terminate(nil) }
+        let colorTitle = panelLabel("สีธีม", size: 11.5, weight: .medium, color: .secondaryLabelColor, align: .left)
+        let optTitle = panelLabel("พฤติกรรม", size: 11.5, weight: .medium, color: .secondaryLabelColor, align: .left)
+        let root = NSStackView(views: [head, colorTitle, colorRow, optTitle, dim, batt, flexibleSpace(), verRow, quit])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 10
+        root.setCustomSpacing(14, after: head)
+        root.setCustomSpacing(6, after: colorTitle)
+        root.setCustomSpacing(18, after: colorRow)
+        root.setCustomSpacing(6, after: optTitle)
+        for v in [head, colorRow, dim, batt, verRow, quit] as [NSView] {
+            v.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        }
+        return root
+    }
+
+    private func settingRow(_ text: String, on: Bool, enabled: Bool, _ sel: Selector) -> NSView {
+        let l = panelLabel(text, size: 12.5, align: .left)
+        l.lineBreakMode = .byTruncatingTail
+        l.toolTip = text
+        l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let sw = NSSwitch()
+        sw.controlSize = .small
+        sw.state = on ? .on : .off
+        sw.isEnabled = enabled
+        sw.target = self
+        sw.action = sel
+        sw.setAccessibilityLabel(text)
+        let s = NSStackView(views: [l, flexibleSpace(), sw])
+        s.orientation = .horizontal
+        return s
+    }
+    @objc private func toggleDim(_ s: NSSwitch) { app.setAutoDim(s.state == .on) }
+    @objc private func toggleBatt(_ s: NSSwitch) { app.setLowBatt(s.state == .on) }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     var window: NSWindow!
-    var statusLabel: NSTextField!
-    var subLabel: NSTextField!
-    var headerBox: NSView!
-    var stopButton: NSButton!
-    var displayCheck: NSButton!
-    var customField: NSTextField!
+    var windowPanel: PanelController?
+    var popoverPanel: PanelController?
+    var statusItem: NSStatusItem?
+    let popover = NSPopover()
 
     let power = PowerAssertion()
     var timer: Timer?
     var endDate: Date?
     var infinite = false
-    var screenCanSleep = true
+    var screenCanSleep = true              // ค่าที่ผู้ใช้ตั้งไว้ (บันทึกถาวร)
+    var vpnActive = false                  // โหมด VPN บังคับจอไม่ดับเฉพาะรอบนี้
+    var ringTotal = 0                      // เวลาทั้งหมดของวงแหวน (ต่อเวลาแล้วเพิ่มตาม ไม่รีเซ็ตเป็นเต็มวง)
+    var sessionStart: Date?                // เริ่มรอบนี้เมื่อไหร่ (ใช้แสดง "ผ่านไป")
+    var effectiveScreenCanSleep: Bool { screenCanSleep && !vpnActive }
 
     // เฝ้าดูโปรเซส: กันหลับจนกว่าแอปที่เลือกจะปิด
     var watchedApp: NSRunningApplication?
 
     // หยุดเมื่อแบตต่ำ
-    var lowBattCheck: NSButton!
     var lowBattEnabled = false
     let lowBattThreshold = 15
     var battTick = 0
 
     // หรี่จออัตโนมัติ
-    var autoDimCheck: NSButton!
     var autoDimEnabled = false
     var isDimmed = false
     var brightnessBeforeDim: Float?
     let dimAfterSeconds: Double = 300      // ไม่แตะเครื่อง 5 นาที -> หรี่จอ
     let dimLevel: Float = 0.05             // ระดับหรี่ (5%)
 
-    var updateButton: NSButton!
+    var updateTitle = "ตรวจสอบอัปเดต"
     var isUpdating = false
     var currentAccent: AccentChoice = .green
     var accent: NSColor = AccentChoice.green.color
-    var accentButtons: [NSButton] = []
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        loadAccentPreference()
+        loadPreferences()
         buildAppMenu()
         buildWindow()
+        buildStatusItem()
         updateStatus()   // ตอนว่างใช้ไอคอนบันเดิล (.icns) — ไม่ override
-        NSApp.activate(ignoringOtherApps: true)
+        showWindow()     // เปิดหน้าต่างเสมอ เผื่อไอคอนเมนูบาร์ไม่มีที่แสดง
     }
 
-    // ---------- สีธีม: โหลด/บันทึกค่าที่เลือก ----------
-    func loadAccentPreference() {
-        if let raw = UserDefaults.standard.string(forKey: "accentChoice"),
-           let c = AccentChoice(rawValue: raw) {
+    // ---------- โหลดค่าที่บันทึกไว้ ----------
+    func loadPreferences() {
+        let ud = UserDefaults.standard
+        if let raw = ud.string(forKey: "accentChoice"), let c = AccentChoice(rawValue: raw) {
             currentAccent = c
         }
         accent = currentAccent.color
+        screenCanSleep = (ud.object(forKey: "screenCanSleep") as? Bool) ?? true
+        autoDimEnabled = ud.bool(forKey: "autoDim")
+        lowBattEnabled = ud.bool(forKey: "stopOnLowBatt")
+        if autoDimEnabled { startTimer() }   // ให้เช็ค idle ตั้งแต่เปิดแอป
     }
 
     // ปิดหน้าต่างแล้ว "ไม่ปิดแอป" — ทำงานต่อเบื้องหลัง
@@ -188,7 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sender.orderOut(nil)                       // ซ่อนหน้าต่าง ไม่ทำลาย
         if power.isActive && !toldAboutBackground {
             toldAboutBackground = true             // เตือนครั้งแรกครั้งเดียวพอ
-            notify("ยังทำงานอยู่เบื้องหลัง — คลิกไอคอนใน Dock เพื่อเปิดหน้าต่างกลับมา")
+            notify("ยังทำงานอยู่เบื้องหลัง — คลิกไอคอนใน Dock หรือเมนูบาร์เพื่อเปิดกลับมา")
         }
         return false
     }
@@ -200,6 +672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func showWindow() {
+        if popover.isShown { popover.performClose(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -221,268 +694,162 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenu.addItem(NSMenuItem(title: "ออกจากโปรแกรม KeepAwake",
                                    action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
+
+        // แอปที่สร้างเมนูเองต้องมีเมนู Edit ไม่งั้น Cmd+C/V/X/A ในช่องกรอกจะไม่ทำงาน
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "แก้ไข")
+        editMenu.addItem(withTitle: "เลิกทำ", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "ทำซ้ำ", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "ตัด", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "คัดลอก", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "วาง", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "เลือกทั้งหมด", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+
+        let windowItem = NSMenuItem()
+        mainMenu.addItem(windowItem)
+        let windowMenu = NSMenu(title: "หน้าต่าง")
+        windowMenu.addItem(withTitle: "ปิดหน้าต่าง", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "ย่อหน้าต่าง", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
+
         NSApp.mainMenu = mainMenu
     }
 
-    // ---------- UI ----------
+    // ---------- หน้าต่างและเมนูบาร์ ----------
     func buildWindow() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 480),
-                         styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
-                         backing: .buffered, defer: false)
+        let panel = PanelController(app: self, topInset: 30)   // เว้นที่ให้ปุ่มสัญญาณไฟมุมซ้ายบน
+        let w = NSWindow(contentViewController: panel)
+        w.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
         w.title = "KeepAwake"
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
         w.isMovableByWindowBackground = true
-        w.center()
         w.delegate = self
-        window = w
-
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .centerX
-        root.spacing = 9
-        root.edgeInsets = NSEdgeInsets(top: 28, left: 16, bottom: 16, right: 16)
-        root.translatesAutoresizingMaskIntoConstraints = false
-
-        // ===== การ์ดสถานะด้านบน =====
-        statusLabel = makeLabel("พร้อมใช้งาน", size: 27, bold: true)
-        statusLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 27, weight: .bold)
-        subLabel = makeLabel("กันไม่ให้ Mac หลับ", size: 11, bold: false)
-        subLabel.textColor = .secondaryLabelColor
-        headerBox = card([statusLabel, subLabel], spacing: 2, padding: 12)
-        // headerBox มีสีตามสถานะ (active/ไม่ active) ไม่ใช่สีการ์ดปกติ -> ให้ updateStatus คุมสีเองตอน appearance เปลี่ยน
-        (headerBox as? AppearanceAwareView)?.onAppearanceChange = { [weak self] in self?.updateStatus() }
-        root.addArrangedSubview(headerBox)
-
-        // ===== การ์ด: ตั้งเวลา =====
-        customField = NSTextField(string: UserDefaults.standard.string(forKey: "customTime") ?? "120")
-        customField.widthAnchor.constraint(equalToConstant: 62).isActive = true
-        customField.alignment = .center
-        customField.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        customField.placeholderString = "120"
-        customField.target = self
-        customField.action = #selector(startCustom)   // กด Enter ในช่อง = เริ่มทันที
-        customField.setContentHuggingPriority(.required, for: .horizontal)
-        customField.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        let hint = makeLabel("เลข = นาที · m = นาที · h = ชั่วโมง", size: 10, bold: false)
-        hint.textColor = .tertiaryLabelColor
-
-        // ช่องกำหนดเอง + ปุ่มต่อเวลา รวมเป็นแถวเดียว (ช่องกว้างคงที่ ที่เหลือแบ่งเท่ากัน)
-        let customRow = NSStackView(views: [
-            customField,
-            hstack([btn("ตั้งเวลา", #selector(startCustom)),
-                    btn("+15", #selector(add15)),
-                    btn("+30", #selector(add30))])
-        ])
-        customRow.orientation = .horizontal
-        customRow.spacing = 6
-        customRow.distribution = .fill
-
-        let timeCard = card([
-            sectionLabel("ตั้งเวลา"),
-            hstack([btn("30 นาที", #selector(start30)), btn("1 ชม.", #selector(start60)),
-                    btn("2 ชม.", #selector(start120)), btn("4 ชม.", #selector(start240))]),
-            customRow,
-            hint,
-            hstack([btn("เปิดค้างไว้", #selector(startInfinite)),
-                    btn("เฝ้าดูแอป…", #selector(pickWatchApp))])
-        ], spacing: 6, padding: 11)
-        root.addArrangedSubview(timeCard)
-
-        // ===== การ์ด: หน้าจอ & VPN =====
-        let vpnBtn = btn("กัน VPN หลุด", #selector(vpnMode))
-        vpnBtn.bezelColor = NSColor.systemBlue
-        vpnBtn.contentTintColor = .white
-
-        let ud = UserDefaults.standard
-        screenCanSleep = (ud.object(forKey: "screenCanSleep") as? Bool) ?? true
-        autoDimEnabled = ud.bool(forKey: "autoDim")
-
-        displayCheck = NSButton(checkboxWithTitle: "ให้จอดับได้ (ประหยัดไฟ)",
-                                target: self, action: #selector(toggleDisplay))
-        displayCheck.state = screenCanSleep ? .on : .off
-        autoDimCheck = NSButton(checkboxWithTitle: "หรี่จออัตโนมัติเมื่อไม่ได้ใช้ 5 นาที",
-                                target: self, action: #selector(toggleAutoDim))
-        autoDimCheck.state = autoDimEnabled ? .on : .off
-        autoDimCheck.isEnabled = Brightness.available
-        if autoDimEnabled { startTimer() }   // ให้เช็ค idle ตั้งแต่เปิดแอป
-
-        lowBattEnabled = ud.bool(forKey: "stopOnLowBatt")
-        lowBattCheck = NSButton(checkboxWithTitle: "หยุดเองเมื่อใช้แบตต่ำกว่า \(lowBattThreshold)%",
-                                target: self, action: #selector(toggleLowBatt))
-        lowBattCheck.state = lowBattEnabled ? .on : .off
-
-        let screenCard = card([
-            sectionLabel("หน้าจอ & VPN"),
-            hstack([vpnBtn, btn("ดับจอเดี๋ยวนี้", #selector(blankScreenNow))]),
-            leftRow(displayCheck),
-            leftRow(autoDimCheck),
-            leftRow(lowBattCheck)
-        ], spacing: 6, padding: 11)
-        root.addArrangedSubview(screenCard)
-
-        // ===== การ์ด: สีธีม =====
-        accentButtons = AccentChoice.allCases.enumerated().map { i, c in
-            let b = NSButton(image: colorSwatchImage(c.color, selected: c == currentAccent),
-                              target: self, action: #selector(pickAccent(_:)))
-            b.isBordered = false
-            b.imagePosition = .imageOnly
-            b.tag = i
-            b.toolTip = c.label
-            b.widthAnchor.constraint(equalToConstant: 26).isActive = true
-            b.heightAnchor.constraint(equalToConstant: 26).isActive = true
-            return b
-        }
-        let colorRow = NSStackView(views: [sectionLabel("สีธีม")] + accentButtons)
-        colorRow.orientation = .horizontal
-        colorRow.alignment = .centerY
-        colorRow.spacing = 6
-        colorRow.distribution = .equalSpacing
-        let colorCard = card([colorRow], spacing: 0, padding: 9)
-        root.addArrangedSubview(colorCard)
-
-        // ===== ปุ่มหยุด =====
-        stopButton = btn("หยุด", #selector(stopNow))
-        stopButton.isEnabled = false
-        root.addArrangedSubview(stopButton)
-
-        // ===== แถวล่าง: เวอร์ชันปัจจุบัน + ปุ่มตรวจสอบอัปเดต =====
-        let verLabel = makeLabel("KeepAwake v\(appVersion())", size: 10, bold: false)
-        verLabel.textColor = .tertiaryLabelColor
-        updateButton = NSButton(title: "ตรวจสอบอัปเดต", target: self, action: #selector(checkForUpdate))
-        updateButton.bezelStyle = .rounded
-        updateButton.controlSize = .small
-        updateButton.font = NSFont.systemFont(ofSize: 11)
-        let footer = NSStackView(views: [verLabel, updateButton])
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
-        footer.distribution = .equalSpacing
-        root.addArrangedSubview(footer)
-        footer.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
-
-        let content = w.contentView!
-        content.addSubview(root)
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            root.topAnchor.constraint(equalTo: content.topAnchor),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor)
-        ])
-        // ให้การ์ดกว้างเท่ากันทั้งหมด
-        for c in [headerBox!, timeCard, screenCard, colorCard] {
-            c.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
-        }
-        stopButton.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
-
-        // ให้หน้าต่างสูงพอดีเนื้อหาจริง ไม่เหลือที่ว่างท้ายหน้าต่าง
-        content.layoutSubtreeIfNeeded()
-        let fitting = root.fittingSize
-        w.setContentSize(NSSize(width: 400, height: ceil(fitting.height)))
         w.center()
-        w.makeKeyAndOrderFront(nil)
+        window = w
+        windowPanel = panel
     }
 
-    /// กล่องการ์ดพื้นหลังโค้งมน
-    func card(_ views: [NSView], spacing: CGFloat, padding: CGFloat) -> NSView {
-        let box = AppearanceAwareView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 12
-        box.layer?.borderWidth = 1
-        box.translatesAutoresizingMaskIntoConstraints = false
-        func applyDefaultColors() {
-            box.effectiveAppearance.performAsCurrentDrawingAppearance {
-                box.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-                box.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+    func buildStatusItem() {
+        popoverPanel = PanelController(app: self, topInset: 16)
+        popover.behavior = .transient
+        popover.delegate = self
+        popover.contentViewController = popoverPanel
+        popover.contentSize = NSSize(width: PanelController.width, height: PanelController.contentHeight + 16)
+
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.target = self
+        item.button?.action = #selector(togglePopover)
+        item.button?.imagePosition = .imageLeading
+        item.button?.toolTip = "KeepAwake"
+        item.button?.setAccessibilityLabel("KeepAwake")
+        statusItem = item
+    }
+
+    @objc func togglePopover() {
+        guard let button = statusItem?.button else { return }
+        if popover.isShown { popover.performClose(nil); return }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    // ปิดแผงแล้วกลับหน้าหลักเสมอ เปิดครั้งหน้าจะได้เห็นเวลาก่อน
+    func popoverDidClose(_ notification: Notification) {
+        popoverPanel?.showingSettings = false
+        popoverPanel?.refresh()
+    }
+
+    /// วงแหวนจิ๋วบนเมนูบาร์: เป็น template image จึงเปลี่ยนสีตามแถบเมนูเอง
+    func statusRingImage(progress: CGFloat, active: Bool) -> NSImage {
+        let img = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+            let r = rect.insetBy(dx: 2, dy: 2)
+            let track = NSBezierPath(ovalIn: r)
+            track.lineWidth = 2
+            NSColor.black.withAlphaComponent(active ? 0.3 : 0.75).setStroke()
+            track.stroke()
+            if active {
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: NSPoint(x: r.midX, y: r.midY), radius: r.width / 2,
+                              startAngle: 90, endAngle: 90 - 360 * min(progress, 1), clockwise: true)
+                arc.lineWidth = 2
+                arc.lineCapStyle = .round
+                NSColor.black.setStroke()
+                arc.stroke()
             }
+            return true
         }
-        applyDefaultColors()
-        box.onAppearanceChange = applyDefaultColors
-
-        let s = NSStackView(views: views)
-        s.orientation = .vertical
-        s.alignment = .centerX
-        s.spacing = spacing
-        s.edgeInsets = NSEdgeInsets(top: padding, left: padding, bottom: padding, right: padding)
-        s.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(s)
-        NSLayoutConstraint.activate([
-            s.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            s.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            s.topAnchor.constraint(equalTo: box.topAnchor),
-            s.bottomAnchor.constraint(equalTo: box.bottomAnchor)
-        ])
-        // ให้ของข้างในกว้างเต็มการ์ด
-        for v in views where (v is NSStackView || v is NSButton) {
-            v.widthAnchor.constraint(equalTo: s.widthAnchor, constant: -padding * 2).isActive = true
-        }
-        return box
-    }
-
-    /// จัดคอนโทรลชิดซ้ายภายในการ์ด
-    func leftRow(_ v: NSView) -> NSStackView {
-        let s = NSStackView(views: [v])
-        s.orientation = .horizontal
-        s.alignment = .centerY
-        s.distribution = .fill
-        return s
-    }
-
-    func makeLabel(_ s: String, size: CGFloat, bold: Bool) -> NSTextField {
-        let l = NSTextField(labelWithString: s)
-        l.font = bold ? NSFont.boldSystemFont(ofSize: size) : NSFont.systemFont(ofSize: size)
-        l.alignment = .center
-        return l
-    }
-    func sectionLabel(_ s: String) -> NSTextField {
-        let l = makeLabel(s, size: 10, bold: true)
-        l.textColor = .secondaryLabelColor
-        return l
-    }
-    func btn(_ title: String, _ sel: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: sel)
-        b.bezelStyle = .rounded
-        b.controlSize = .large
-        b.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        return b
-    }
-    func hstack(_ views: [NSView]) -> NSStackView {
-        let s = NSStackView(views: views)
-        s.orientation = .horizontal
-        s.spacing = 6
-        s.distribution = .fillEqually
-        return s
-    }
-
-    // ---------- วงกลมสีตัวอย่างสำหรับปุ่มเลือกธีม ----------
-    func colorSwatchImage(_ color: NSColor, selected: Bool) -> NSImage {
-        let size = NSSize(width: 28, height: 28)
-        let img = NSImage(size: size)
-        img.lockFocus()
-        let rect = NSRect(x: 2, y: 2, width: 24, height: 24)
-        let path = NSBezierPath(ovalIn: rect)
-        color.setFill(); path.fill()
-        if selected {
-            NSColor.labelColor.setStroke()
-            path.lineWidth = 2.5
-            path.stroke()
-        }
-        img.unlockFocus()
+        img.isTemplate = true
         return img
     }
 
-    /// เลือกสีธีมใหม่: บันทึกค่า อัปเดตหน้าจอ/ไอคอน Dock ทันที
-    @objc func pickAccent(_ sender: NSButton) {
-        let choices = AccentChoice.allCases
-        guard sender.tag >= 0, sender.tag < choices.count else { return }
-        currentAccent = choices[sender.tag]
-        accent = currentAccent.color
-        UserDefaults.standard.set(currentAccent.rawValue, forKey: "accentChoice")
-        for (i, b) in accentButtons.enumerated() {
-            b.image = colorSwatchImage(choices[i].color, selected: choices[i] == currentAccent)
+    var lastStatusItemKey = ""
+    func updateStatusItem(progress: CGFloat, title: String) {
+        // เปลี่ยนจริงค่อยวาด: แถบเมนูไม่ต้องวาดใหม่ทุกวินาที
+        let key = "\(power.isActive)|\(Int(progress * 48))|\(title)"
+        guard key != lastStatusItemKey, let button = statusItem?.button else { return }
+        lastStatusItemKey = key
+        button.image = statusRingImage(progress: progress, active: power.isActive)
+        button.title = title.isEmpty ? "" : " \(title)"
+    }
+
+    /// โหมดปัจจุบัน ใช้เลือกชุดปุ่มในแผง
+    var modeKey: String {
+        guard power.isActive else { return "idle" }
+        if watchedApp != nil { return "watch" }
+        if vpnActive { return "vpn" }
+        return infinite ? "infinite" : "timed"
+    }
+
+    private var screenStatusText: String {
+        (effectiveScreenCanSleep ? "จอดับได้" : "จอไม่ดับ") + " · เครื่องไม่หลับ"
+    }
+
+    private func elapsedText() -> String {
+        "ผ่านไป \(fmt(Int(Date().timeIntervalSince(sessionStart ?? Date()))))"
+    }
+
+    private func endTimeText(_ end: Date, remaining: Int) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "th_TH")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = remaining >= 86400 ? "d MMM HH:mm" : "HH:mm"   // เกินหนึ่งวันต้องบอกวันที่ด้วย
+        return "ถึง \(f.string(from: end)) น."
+    }
+
+    /// ข้อความและวงแหวนของสถานะปัจจุบัน
+    func ringDisplay(editing: Bool = false) -> (progress: CGFloat, color: NSColor, big: String, small: String, status: String) {
+        switch modeKey {
+        case "watch":
+            let name = watchedApp?.localizedName ?? "แอป"
+            return (1, accent, "เฝ้าดูงาน", elapsedText(), "จนกว่า \(name) จะปิด · เครื่องไม่หลับ")
+        case "vpn":
+            return (1, .systemBlue, "กัน VPN", elapsedText(), screenStatusText)
+        case "infinite":
+            return (1, accent, "ไม่จำกัด", elapsedText(), screenStatusText)
+        case "timed":
+            guard let end = endDate else { fallthrough }
+            let rem = Int(end.timeIntervalSinceNow.rounded())
+            return (CGFloat(Core.ringProgress(remaining: rem, total: ringTotal)), accent,
+                    fmt(rem), endTimeText(end, remaining: rem), screenStatusText)
+        default:
+            return (0, accent, "พร้อม", "เลือกเวลาด้านล่าง",
+                    editing ? "เลข = นาที · m = นาที · h = ชั่วโมง" : "กันไม่ให้ Mac หลับ")
         }
+    }
+
+    /// เลือกสีธีมใหม่: บันทึกค่า อัปเดตหน้าจอ/ไอคอน Dock ทันที
+    func pickAccent(_ choice: AccentChoice) {
+        currentAccent = choice
+        accent = choice.color
+        UserDefaults.standard.set(choice.rawValue, forKey: "accentChoice")
         updateStatus()
-        updateDockIcon(active: power.isActive)
+        if power.isActive { updateDockIcon(active: true) }   // ตอนว่างคงไอคอนบันเดิลไว้
     }
 
     // ---------- อัปเดตอัตโนมัติจาก GitHub Releases ----------
@@ -497,8 +864,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func setUpdateBusy(_ busy: Bool, title: String = "ตรวจสอบอัปเดต") {
         isUpdating = busy
-        updateButton?.isEnabled = !busy
-        updateButton?.title = title
+        updateTitle = title
+        updateStatus()
     }
 
     func updateAlert(_ message: String, _ info: String, style: NSAlert.Style = .informational) {
@@ -719,54 +1086,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func badgeText(_ total: Int) -> String { Core.badgeText(total) }
 
     func updateStatus() {
-        let active = power.isActive
-        if !active {
-            statusLabel.stringValue = "พร้อมใช้งาน"
-            statusLabel.font = NSFont.boldSystemFont(ofSize: 26)
-            statusLabel.textColor = .secondaryLabelColor
-            subLabel.stringValue = "กันไม่ให้ Mac หลับ"
+        let display = ringDisplay()
+        var menuTitle = ""
+        switch modeKey {
+        case "watch":
+            setDockBadge("👁"); menuTitle = "👁"
+        case "vpn":
+            setDockBadge("∞"); menuTitle = "VPN"
+        case "infinite":
+            setDockBadge("∞"); menuTitle = "∞"
+        case "timed":
+            let rem = endDate.map { Int($0.timeIntervalSinceNow.rounded()) } ?? 0
+            setDockBadge(badgeText(rem)); menuTitle = Core.menuBarText(rem)
+        default:
             setDockBadge("")
-        } else if infinite {
-            if let w = watchedApp {
-                statusLabel.stringValue = "เฝ้าดูงาน"
-                statusLabel.font = NSFont.boldSystemFont(ofSize: 30)
-                statusLabel.textColor = accent
-                subLabel.stringValue = "จนกว่า \(w.localizedName ?? "แอป") จะปิด • เครื่องไม่หลับ"
-                setDockBadge("👁")
-            } else {
-                statusLabel.stringValue = "เปิดค้างไว้"
-                statusLabel.font = NSFont.boldSystemFont(ofSize: 30)
-                statusLabel.textColor = accent
-                subLabel.stringValue = screenCanSleep ? "จอดับได้ • เครื่องไม่หลับ" : "จอไม่ดับ • เครื่องไม่หลับ"
-                setDockBadge("∞")
-            }
-        } else if let end = endDate {
-            let rem = Int(end.timeIntervalSinceNow.rounded())
-            statusLabel.stringValue = fmt(rem)
-            statusLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 40, weight: .bold)
-            statusLabel.textColor = accent
-            subLabel.stringValue = screenCanSleep ? "จอดับได้ • เครื่องไม่หลับ" : "จอไม่ดับ • เครื่องไม่หลับ"
-            setDockBadge(badgeText(rem))
         }
-        // การ์ดสถานะเปลี่ยนสีตามสถานะ (ห่อด้วย performAsCurrentDrawingAppearance กัน .cgColor ค้างสีตอนสลับ dark/light)
-        headerBox?.effectiveAppearance.performAsCurrentDrawingAppearance {
-            headerBox?.layer?.backgroundColor = active
-                ? accent.withAlphaComponent(0.12).cgColor
-                : NSColor.controlBackgroundColor.cgColor
-            headerBox?.layer?.borderColor = active
-                ? accent.withAlphaComponent(0.45).cgColor
-                : NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-        }
-        stopButton?.isEnabled = active
-        stopButton?.bezelColor = active ? NSColor.systemRed : nil
+        updateStatusItem(progress: display.progress, title: menuTitle)
+        windowPanel?.refresh()
+        popoverPanel?.refresh()
     }
 
     // ---------- กันเครื่องหลับ ----------
 
-    func launch(seconds: Int, isInfinite: Bool, notifyUser: Bool = true) {
+    func launch(seconds: Int, isInfinite: Bool, notifyUser: Bool = true, vpn: Bool = false,
+                continuing: Bool = false) {
+        // continuing = รอบเดิมทำต่อ (ต่อเวลา/สลับจอ): วงแหวนและเวลาที่ผ่านไปต้องไม่รีเซ็ต
+        let previousTotal = ringTotal
+        let previousStart = sessionStart
         stop()
         // สร้าง power assertion ผ่าน IOKit ตรงๆ — in-process ไม่มีโปรเซสลูก ไม่มีทางค้าง
-        guard power.start(screenCanSleep: screenCanSleep) else {
+        guard power.start(screenCanSleep: screenCanSleep && !vpn) else {
             // แจ้งชัดๆ อย่าปล่อยให้ผู้ใช้เข้าใจผิดว่าเครื่องถูกกันหลับอยู่
             let a = NSAlert()
             a.messageText = "เริ่มไม่สำเร็จ"
@@ -775,7 +1124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             a.runModal()
             return
         }
+        vpnActive = vpn
         infinite = isInfinite
+        ringTotal = continuing ? max(previousTotal, seconds) : seconds
+        sessionStart = continuing ? (previousStart ?? Date()) : Date()
         endDate = isInfinite ? nil : Date().addingTimeInterval(TimeInterval(seconds))
         startTimer()
         updateDockIcon(active: true)
@@ -810,6 +1162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         infinite = false
         endDate = nil
         watchedApp = nil
+        vpnActive = false
+        ringTotal = 0
+        sessionStart = nil
         battTick = 0
         NSApp.applicationIconImage = nil   // คืนเป็นไอคอนบันเดิล (.icns)
         updateStatus()
@@ -826,55 +1181,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // ---------- การกระทำของปุ่ม ----------
-    @objc func start30() { launch(seconds: 1800, isInfinite: false) }
-    @objc func start60() { launch(seconds: 3600, isInfinite: false) }
-    @objc func start120() { launch(seconds: 7200, isInfinite: false) }
-    @objc func start240() { launch(seconds: 14400, isInfinite: false) }
     @objc func startInfinite() { launch(seconds: 0, isInfinite: true) }
     @objc func vpnMode() {
-        screenCanSleep = false          // จอไม่ดับ ไม่ล็อกจอ -> VPN ไม่หลุด
-        displayCheck.state = .off
-        launch(seconds: 0, isInfinite: true)
+        launch(seconds: 0, isInfinite: true, vpn: true)   // จอไม่ดับ ไม่ล็อกจอ -> VPN ไม่หลุด
     }
-    @objc func add15() { extend(900) }
-    @objc func add30() { extend(1800) }
-
     func extend(_ delta: Int) {
-        if !power.isActive {
-            launch(seconds: delta, isInfinite: false)           // ยังไม่ได้เริ่ม -> เริ่มใหม่
-        } else if infinite {
-            notify("อยู่ในโหมดเปิดค้างไว้ ไม่ต้องต่อเวลา")        // บอกผู้ใช้ ไม่เงียบเฉย
-        } else if let end = endDate {
-            let remaining = max(0, Int(end.timeIntervalSinceNow.rounded()))
-            launch(seconds: remaining + delta, isInfinite: false, notifyUser: false)  // ต่อเวลา ไม่ต้องแจ้ง "เริ่ม" ซ้ำ
-        }
+        guard power.isActive, !infinite, let end = endDate else { return }
+        let remaining = max(0, Int(end.timeIntervalSinceNow.rounded()))
+        ringTotal += delta
+        launch(seconds: remaining + delta, isInfinite: false, notifyUser: false, continuing: true)  // ไม่แจ้ง "เริ่ม" ซ้ำ
     }
 
-    @objc func startCustom() {
-        if let secs = parseTime(customField.stringValue) {
-            UserDefaults.standard.set(customField.stringValue, forKey: "customTime")
-            launch(seconds: secs, isInfinite: false)
-        } else {
+    /// คืน true ถ้าเริ่มได้ ค่าไม่ถูกต้องจะแจ้งเตือนและคงช่องกรอกไว้
+    func startCustom(_ text: String) -> Bool {
+        guard let secs = parseTime(text) else {
             let e = NSAlert()
             e.messageText = "ค่าที่พิมพ์ไม่ถูกต้อง"
             e.informativeText = "ลองใหม่ เช่น 90, 45m, 2h"
+            NSApp.activate(ignoringOtherApps: true)
             e.runModal()
+            return false
         }
+        UserDefaults.standard.set(text, forKey: "customTime")
+        launch(seconds: secs, isInfinite: false)
+        return power.isActive
     }
 
-    @objc func toggleDisplay() {
-        screenCanSleep = (displayCheck.state == .on)
+    func setScreenCanSleep(_ on: Bool) {
+        screenCanSleep = on
         UserDefaults.standard.set(screenCanSleep, forKey: "screenCanSleep")
         guard power.isActive else { updateStatus(); return }
         if infinite {
             let w = watchedApp                       // เก็บ watch ไว้ก่อน (launch->stop จะล้างทิ้ง)
-            launch(seconds: 0, isInfinite: true, notifyUser: false)   // แค่สลับโหมด ไม่ต้องแจ้งซ้ำ
+            launch(seconds: 0, isInfinite: true, notifyUser: false, continuing: true)   // แค่สลับโหมด ไม่ต้องแจ้งซ้ำ
             if power.isActive, w != nil {            // คืนการเฝ้าดูหลังสลับโหมดจอ
                 watchedApp = w
                 updateStatus()
             }
         } else if let end = endDate {
-            launch(seconds: max(1, Int(end.timeIntervalSinceNow.rounded())), isInfinite: false, notifyUser: false)
+            launch(seconds: max(1, Int(end.timeIntervalSinceNow.rounded())), isInfinite: false,
+                   notifyUser: false, continuing: true)
         }
     }
 
@@ -917,9 +1263,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // ---------- หยุดเมื่อแบตต่ำ ----------
-    @objc func toggleLowBatt() {
-        lowBattEnabled = (lowBattCheck.state == .on)
+    func setLowBatt(_ on: Bool) {
+        lowBattEnabled = on
         UserDefaults.standard.set(lowBattEnabled, forKey: "stopOnLowBatt")
+        updateStatus()
     }
 
     func checkLowBattery() {
@@ -935,8 +1282,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // ---------- หรี่จอ / ดับจอ โดยเครื่องยังทำงาน ----------
-    @objc func toggleAutoDim() {
-        autoDimEnabled = (autoDimCheck.state == .on)
+    func setAutoDim(_ on: Bool) {
+        autoDimEnabled = on
         UserDefaults.standard.set(autoDimEnabled, forKey: "autoDim")
         if autoDimEnabled {
             if timer == nil { startTimer() }        // ให้ตัวจับเวลาเดินเพื่อคอยเช็ค idle
@@ -946,6 +1293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 timer?.invalidate(); timer = nil
             }
         }
+        updateStatus()
     }
 
     @objc func blankScreenNow() {

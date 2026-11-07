@@ -34,6 +34,21 @@ enum Core {
         return String(format: "%d นาที", max(1, m + (s % 60 > 0 ? 1 : 0)))
     }
 
+    /// สัดส่วนของวงแหวนเวลา (0...1): กันค่าล้นและการหารด้วยศูนย์
+    static func ringProgress(remaining: Int, total: Int) -> Double {
+        guard total > 0 else { return 1 }
+        return min(1, max(0, Double(remaining) / Double(total)))
+    }
+
+    /// ข้อความสั้นบนเมนูบาร์: ชม>0 -> "H:MM", ไม่งั้นปัดขึ้นเป็นนาที "N น." (อย่างน้อย 1)
+    /// 59:01 ขึ้นไปปัดเป็น "1:00" เพื่อไม่ให้ขึ้น "60 น."
+    static func menuBarText(_ total: Int) -> String {
+        let s = max(0, total)
+        if s >= 3600 { return String(format: "%d:%02d", s / 3600, (s % 3600) / 60) }
+        let minutes = max(1, (s + 59) / 60)
+        return minutes >= 60 ? "1:00" : "\(minutes) น."
+    }
+
     /// escape ข้อความก่อนแทรกเข้า AppleScript string literal
     static func escapeForAppleScript(_ msg: String) -> String {
         return msg.replacingOccurrences(of: "\\", with: "\\\\")

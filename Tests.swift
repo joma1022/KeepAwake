@@ -85,6 +85,24 @@ check("ไม่มี .dmg -> nil", Core.pickUpdateAsset(["KeepAwake-Installer.
 check("ลิสต์ว่าง -> nil", Core.pickUpdateAsset([]) == nil)
 eq("นามสกุลตัวพิมพ์ใหญ่", Core.pickUpdateAsset(["A.DMG"]), "A.DMG")
 
+// ---------- วงแหวนเวลา ----------
+print("ringProgress:")
+eq("เริ่มต้น = เต็ม", Core.ringProgress(remaining: 3600, total: 3600), 1.0)
+eq("เหลือครึ่ง", Core.ringProgress(remaining: 1800, total: 3600), 0.5)
+eq("หมดเวลา = 0", Core.ringProgress(remaining: 0, total: 3600), 0.0)
+eq("เวลาติดลบไม่ล้น", Core.ringProgress(remaining: -5, total: 3600), 0.0)
+eq("เหลือมากกว่าทั้งหมดไม่ล้น", Core.ringProgress(remaining: 4000, total: 3600), 1.0)
+eq("total เป็น 0 ไม่หารศูนย์", Core.ringProgress(remaining: 10, total: 0), 1.0)
+
+// ---------- ข้อความบนเมนูบาร์ ----------
+print("menuBarText:")
+eq("มีชั่วโมง", Core.menuBarText(6130), "1:42")
+eq("ต่ำกว่าชั่วโมงปัดนาทีขึ้น", Core.menuBarText(301), "6 น.")
+eq("นาทีพอดี", Core.menuBarText(300), "5 น.")
+eq("เหลือไม่ถึงนาที", Core.menuBarText(5), "1 น.")
+eq("3599 วินาทีไม่แสดง 60 น.", Core.menuBarText(3599), "1:00")
+eq("ค่าติดลบ", Core.menuBarText(-3), "1 น.")
+
 // ---------- สรุป ----------
 print("")
 print("ผ่าน \(passed) / \(passed + failed)")
