@@ -853,7 +853,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     // ---------- อัปเดตอัตโนมัติจาก GitHub Releases ----------
-    // ขั้นตอน: เช็คเวอร์ชัน -> ถามผู้ใช้ -> โหลด .dmg -> เมานต์ -> สลับตัวแอป -> เปิดใหม่
+    // ขั้นตอน: เช็คเวอร์ชัน -> ถามผู้ใช้ -> โหลด checksum -> โหลด .dmg -> ตรวจ SHA-256 -> เมานต์ -> สลับตัวแอป -> เปิดใหม่
+    // checksum กันไฟล์เสียหรือถูกสลับระหว่างทาง แต่กันกรณีบัญชี GitHub ถูกยึดไม่ได้ (ต้องใช้การลงนามแอป)
     // ทั้งหมดทำด้วยสิทธิ์ผู้ใช้ปกติ (แอปอยู่ ~/Applications) ไม่ต้องใส่รหัสผ่าน
 
     let updateRepoAPI = "https://api.github.com/repos/joma1022/KeepAwake/releases/latest"
@@ -922,6 +923,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             return
         }
 
+        // ไม่มี checksum = ตรวจไฟล์ไม่ได้ -> ไม่ติดตั้งอัตโนมัติ
+        guard let checksumName = Core.pickChecksumAsset(names, for: pick),
+              let checksumURLStr = assets.first(where: { ($0["name"] as? String) == checksumName })?["browser_download_url"] as? String,
+              let checksumURL = URL(string: checksumURLStr) else {
+            offerOpenReleasePage(tag: tag, url: htmlURL,
+                                 reason: "รุ่นนี้ไม่มีไฟล์ checksum จึงตรวจความถูกต้องของไฟล์อัปเดตไม่ได้")
+            return
+        }
+
         // แอปต้องเขียนทับได้เอง ไม่งั้นต้องให้ผู้ใช้ติดตั้งเอง (กันไปขอรหัสผ่าน)
         let appPath = Bundle.main.bundlePath
         let parent = (appPath as NSString).deletingLastPathComponent
@@ -941,7 +951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         NSApp.activate(ignoringOtherApps: true)
         switch a.runModal() {
         case .alertFirstButtonReturn:
-            downloadAndInstall(assetURL)
+            downloadAndInstall(assetURL, fileName: pick, checksumURL: checksumURL)
         case .alertSecondButtonReturn:
             if let s = htmlURL, let u = URL(string: s) { NSWorkspace.shared.open(u) }
         default:
@@ -961,8 +971,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
     }
 
-    func downloadAndInstall(_ url: URL) {
+    /// โหลด checksum ก่อน ถ้าโหลดหรืออ่านไม่ได้จะไม่โหลดตัวติดตั้งเลย
+    func downloadAndInstall(_ url: URL, fileName: String, checksumURL: URL) {
         setUpdateBusy(true, title: "กำลังดาวน์โหลด…")
+        var req = URLRequest(url: checksumURL)
+        req.setValue("KeepAwake-App", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 30
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 200
+            let text = (code < 400 ? data : nil).flatMap { String(data: $0, encoding: .utf8) }
+            let expected = text.flatMap { Core.parseChecksum($0, fileName: fileName) }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                guard let expected = expected else {
+                    self.setUpdateBusy(false)
+                    self.updateAlert("ตรวจสอบไฟล์อัปเดตไม่ได้",
+                                     "อ่านไฟล์ checksum ไม่ได้ จึงยังไม่ติดตั้ง แอปเดิมยังใช้งานได้ตามปกติ",
+                                     style: .warning)
+                    return
+                }
+                self.downloadInstaller(url, expectedSHA256: expected)
+            }
+        }.resume()
+    }
+
+    func downloadInstaller(_ url: URL, expectedSHA256: String) {
         var req = URLRequest(url: url)
         req.setValue("KeepAwake-App", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 300
@@ -978,12 +1012,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 try? FileManager.default.removeItem(at: dest)
                 if (try? FileManager.default.moveItem(at: tmpURL, to: dest)) != nil { saved = dest }
             }
+            // คำนวณในคิวของ URLSession เพื่อไม่ให้หน้าจอค้าง
+            let verified = saved.flatMap { try? Data(contentsOf: $0, options: .mappedIfSafe) }
+                .map { Core.sha256Hex($0) == expectedSHA256 } ?? false
+            if !verified, let bad = saved { try? FileManager.default.removeItem(at: bad) }
             DispatchQueue.main.async {
                 guard let dmg = saved else {
                     self.setUpdateBusy(false)
                     self.updateAlert("ดาวน์โหลดไม่สำเร็จ",
                                      "โหลดไฟล์อัปเดตไม่ได้ — ลองใหม่ หรือเปิดหน้าดาวน์โหลดเพื่อติดตั้งเอง",
                                      style: .warning)
+                    return
+                }
+                guard verified else {
+                    self.setUpdateBusy(false)
+                    self.updateAlert("ไฟล์อัปเดตไม่ถูกต้อง",
+                                     "ไฟล์ที่โหลดมาไม่ตรงกับ checksum จึงลบทิ้งและไม่ติดตั้ง แอปเดิมยังใช้งานได้ตามปกติ — ลองใหม่อีกครั้ง",
+                                     style: .critical)
                     return
                 }
                 self.installFromDMG(dmg)

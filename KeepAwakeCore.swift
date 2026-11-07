@@ -1,5 +1,6 @@
 // KeepAwakeCore — logic ล้วน ไม่แตะ UI/ระบบ เพื่อให้เขียน unit test ได้
 // กติกา: ทุกฟังก์ชันในไฟล์นี้ต้อง deterministic (อินพุตเดิม = เอาต์พุตเดิมเสมอ)
+import CryptoKit
 import Foundation
 
 enum Core {
@@ -88,5 +89,30 @@ enum Core {
     /// คืน nil ถ้าไม่มี .dmg — ให้ผู้เรียกเปิดหน้าดาวน์โหลดแทน
     static func pickUpdateAsset(_ names: [String]) -> String? {
         return names.first { $0.lowercased().hasSuffix(".dmg") }
+    }
+
+    /// เลือกไฟล์ checksum ของตัวติดตั้งที่ระบุ คืน nil ถ้าไม่มี (ผู้เรียกต้องไม่ติดตั้งอัตโนมัติ)
+    static func pickChecksumAsset(_ names: [String], for fileName: String) -> String? {
+        let want = (fileName + ".sha256").lowercased()
+        return names.first { $0.lowercased() == want }
+    }
+
+    /// อ่านค่า SHA-256 จากไฟล์ checksum: รับรูปแบบของ shasum หรือค่า hash อย่างเดียว
+    /// คืน nil ถ้ารูปแบบไม่ถูกต้อง หรือระบุชื่อไฟล์อื่น
+    static func parseChecksum(_ text: String, fileName: String) -> String? {
+        let parts = text.split(whereSeparator: { $0.isWhitespace })
+        guard parts.count == 1 || parts.count == 2 else { return nil }
+        let hash = parts[0].lowercased()
+        guard hash.count == 64, hash.allSatisfy({ $0.isHexDigit }) else { return nil }
+        if parts.count == 2 {
+            let name = parts[1].hasPrefix("*") ? String(parts[1].dropFirst()) : String(parts[1])
+            guard name == fileName else { return nil }
+        }
+        return hash
+    }
+
+    /// ค่า SHA-256 แบบเลขฐานสิบหกตัวพิมพ์เล็ก
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
