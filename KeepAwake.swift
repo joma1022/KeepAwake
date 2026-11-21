@@ -649,7 +649,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         buildWindow()
         buildStatusItem()
         updateStatus()   // ตอนว่างใช้ไอคอนบันเดิล (.icns) — ไม่ override
-        showWindow()     // เปิดหน้าต่างเสมอ เผื่อไอคอนเมนูบาร์ไม่มีที่แสดง
+        // เปิดเองตอนเข้าเครื่อง = อยู่เงียบๆ บนเมนูบาร์และ Dock ไม่เด้งหน้าต่าง
+        // เปิดด้วยมือ = เปิดหน้าต่างเสมอ เผื่อไอคอนเมนูบาร์ไม่มีที่แสดง (คลิก Dock เปิดหน้าต่างได้ทุกเมื่อ)
+        if !wasLaunchedAtLogin() { showWindow() }
     }
 
     // ---------- โหลดค่าที่บันทึกไว้ ----------
@@ -664,6 +666,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         lowBattEnabled = ud.bool(forKey: "stopOnLowBatt")
         if autoDimEnabled { startTimer() }   // ให้เช็ค idle ตั้งแต่เปิดแอป
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    /// ระบบเปิดแอปให้ตอนเข้าเครื่องหรือเปล่า — ต้องเรียกใน applicationDidFinishLaunching เท่านั้น
+    /// (ดูจาก Apple event ที่ใช้เปิดแอป ซึ่งหลังจากนั้นจะไม่มีให้อ่านแล้ว)
+    func wasLaunchedAtLogin() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventID == kAEOpenApplication else { return false }
+        return event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
     }
 
     // ผู้ใช้อาจปิด/เปิดจาก System Settings > Login Items เอง จึงอ่านสถานะใหม่ทุกครั้งที่กลับมาที่แอป
