@@ -369,6 +369,8 @@ final class PanelController: NSViewController, NSTextFieldDelegate {
         big.stringValue = t.big
         big.font = NSFont.monospacedDigitSystemFont(ofSize: t.big.count > 7 ? 20 : 25, weight: .semibold)
         small.stringValue = t.small
+        small.textColor = app.isLongRun ? .systemOrange : .secondaryLabelColor
+        status.textColor = app.isLongRun ? .systemOrange : .secondaryLabelColor
         status.stringValue = t.status
         status.toolTip = t.status
     }
@@ -607,6 +609,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     var vpnActive = false                  // โหมด VPN บังคับจอไม่ดับเฉพาะรอบนี้
     var ringTotal = 0                      // เวลาทั้งหมดของวงแหวน (ต่อเวลาแล้วเพิ่มตาม ไม่รีเซ็ตเป็นเต็มวง)
     var sessionStart: Date?                // เริ่มรอบนี้เมื่อไหร่ (ใช้แสดง "ผ่านไป")
+    // เตือนเมื่อกันเครื่องหลับแบบไม่จำกัดเวลานานเกิน (เคยเจอค้าง 168 ชม. โดยไม่รู้ตัว)
+    let longRunEvery = 12 * 3600
+    var longRunWarnedAt: Int?              // เตือนครั้งล่าสุดตอนผ่านไปกี่วินาที
     var effectiveScreenCanSleep: Bool { screenCanSleep && !vpnActive }
 
     // เฝ้าดูโปรเซส: กันหลับจนกว่าแอปที่เลือกจะปิด
@@ -823,15 +828,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     /// ข้อความและวงแหวนของสถานะปัจจุบัน
+    /// วินาทีที่กันเครื่องหลับต่อเนื่องในรอบนี้
+    var sessionElapsed: Int { Int(Date().timeIntervalSince(sessionStart ?? Date())) }
+
+    /// โหมดไม่จำกัดเวลา (ไม่จำกัด / VPN / เฝ้าดูแอป) ที่เปิดมานานจนควรเตือน
+    var isLongRun: Bool {
+        guard power.isActive, infinite else { return false }
+        return sessionElapsed >= longRunEvery
+    }
+
+    private func untimedStatus(_ normal: String) -> String {
+        isLongRun ? "เปิดมา \(Core.longRunText(sessionElapsed)) แล้ว · ไม่ใช้แล้วกดหยุดได้" : normal
+    }
+
     func ringDisplay(editing: Bool = false) -> (progress: CGFloat, color: NSColor, big: String, small: String, status: String) {
         switch modeKey {
         case "watch":
             let name = watchedApp?.localizedName ?? "แอป"
-            return (1, accent, "เฝ้าดูงาน", elapsedText(), "จนกว่า \(name) จะปิด · เครื่องไม่หลับ")
+            return (1, accent, "เฝ้าดูงาน", elapsedText(), untimedStatus("จนกว่า \(name) จะปิด · เครื่องไม่หลับ"))
         case "vpn":
-            return (1, .systemBlue, "กัน VPN", elapsedText(), screenStatusText)
+            return (1, .systemBlue, "กัน VPN", elapsedText(), untimedStatus(screenStatusText))
         case "infinite":
-            return (1, accent, "ไม่จำกัด", elapsedText(), screenStatusText)
+            return (1, accent, "ไม่จำกัด", elapsedText(), untimedStatus(screenStatusText))
         case "timed":
             guard let end = endDate else { fallthrough }
             let rem = Int(end.timeIntervalSinceNow.rounded())
@@ -1158,6 +1176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         // continuing = รอบเดิมทำต่อ (ต่อเวลา/สลับจอ): วงแหวนและเวลาที่ผ่านไปต้องไม่รีเซ็ต
         let previousTotal = ringTotal
         let previousStart = sessionStart
+        let previousWarnedAt = longRunWarnedAt
         stop()
         // สร้าง power assertion ผ่าน IOKit ตรงๆ — in-process ไม่มีโปรเซสลูก ไม่มีทางค้าง
         guard power.start(screenCanSleep: screenCanSleep && !vpn) else {
@@ -1173,6 +1192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         infinite = isInfinite
         ringTotal = continuing ? max(previousTotal, seconds) : seconds
         sessionStart = continuing ? (previousStart ?? Date()) : Date()
+        longRunWarnedAt = continuing ? previousWarnedAt : nil   // สลับโหมดจอไม่นับเป็นรอบใหม่ ไม่เตือนซ้ำ
         endDate = isInfinite ? nil : Date().addingTimeInterval(TimeInterval(seconds))
         startTimer()
         updateDockIcon(active: true)
@@ -1193,6 +1213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 self.notify("ครบเวลาแล้ว เครื่องกลับมาหลับได้ตามปกติ")
                 return
             }
+            self.checkLongRun()
             self.updateStatus()
         }
         t.tolerance = 0.2                 // ลดการปลุก CPU ตรงเวลาเป๊ะ ประหยัดแบต
@@ -1210,6 +1231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         vpnActive = false
         ringTotal = 0
         sessionStart = nil
+        longRunWarnedAt = nil
         battTick = 0
         NSApp.applicationIconImage = nil   // คืนเป็นไอคอนบันเดิล (.icns)
         updateStatus()
@@ -1305,6 +1327,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             stop()
             notify("\(name) ปิดแล้ว — เครื่องกลับมาหลับได้ตามปกติ")
         }
+    }
+
+    // ---------- เตือนเมื่อกันเครื่องหลับนานผิดปกติ ----------
+    // เฉพาะโหมดไม่จำกัดเวลา: แบบตั้งเวลาผู้ใช้เลือกความยาวเองแล้ว
+    func checkLongRun() {
+        guard power.isActive, infinite else { return }
+        let elapsed = sessionElapsed
+        guard Core.shouldWarnLongRun(elapsed: elapsed, lastWarnedAt: longRunWarnedAt, every: longRunEvery) else { return }
+        longRunWarnedAt = elapsed
+        notify("กันเครื่องหลับมา \(Core.longRunText(elapsed)) แล้ว — ถ้าไม่ได้ใช้ เปิด KeepAwake แล้วกดหยุด")
     }
 
     // ---------- หยุดเมื่อแบตต่ำ ----------

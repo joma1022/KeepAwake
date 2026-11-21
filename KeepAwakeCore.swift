@@ -50,6 +50,22 @@ enum Core {
         return minutes >= 60 ? "1:00" : "\(minutes) น."
     }
 
+    /// เตือนเมื่อกันเครื่องหลับต่อเนื่องนาน: ครั้งแรกเมื่อครบ every วินาที แล้วทุก every วินาทีหลังเตือนครั้งก่อน
+    /// (นับจากครั้งก่อน ไม่ใช่จากรอบเวลา จึงไม่ไล่เตือนย้อนหลังหลายครั้งติดกัน)
+    static func shouldWarnLongRun(elapsed: Int, lastWarnedAt: Int?, every: Int) -> Bool {
+        guard every > 0, elapsed >= every else { return false }
+        guard let last = lastWarnedAt else { return true }
+        return elapsed - last >= every
+    }
+
+    /// ระยะเวลาแบบอ่านง่ายสำหรับข้อความเตือน เช่น "12 ชม.", "7 วัน 1 ชม."
+    static func longRunText(_ seconds: Int) -> String {
+        let h = max(0, seconds) / 3600
+        let d = h / 24, rh = h % 24
+        if d == 0 { return "\(h) ชม." }
+        return rh == 0 ? "\(d) วัน" : "\(d) วัน \(rh) ชม."
+    }
+
     /// escape ข้อความก่อนแทรกเข้า AppleScript string literal
     static func escapeForAppleScript(_ msg: String) -> String {
         return msg.replacingOccurrences(of: "\\", with: "\\\\")
