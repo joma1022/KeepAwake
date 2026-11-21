@@ -122,6 +122,18 @@ check("ไม่มีไฟล์ checksum -> nil", Core.pickChecksumAsset(["A.
 check("checksum ของไฟล์อื่นไม่นับ", Core.pickChecksumAsset(["B.dmg.sha256"], for: "A.dmg") == nil)
 eq("ไฟล์ .sha256 ไม่ถูกเลือกเป็นตัวติดตั้ง", Core.pickUpdateAsset(["A.dmg.sha256", "A.dmg"]), "A.dmg")
 
+// ---------- เตือนเมื่อกันเครื่องหลับนานผิดปกติ ----------
+print("shouldWarnLongRun:")
+let day = 12 * 3600
+check("ยังไม่ถึง 12 ชม. -> ไม่เตือน", !Core.shouldWarnLongRun(elapsed: day - 1, lastWarnedAt: nil, every: day))
+check("ครบ 12 ชม. -> เตือน", Core.shouldWarnLongRun(elapsed: day, lastWarnedAt: nil, every: day))
+check("เตือนแล้วไม่เตือนซ้ำทุกวินาที", !Core.shouldWarnLongRun(elapsed: day + 1, lastWarnedAt: day, every: day))
+check("อีก 12 ชม. -> เตือนอีก", Core.shouldWarnLongRun(elapsed: 2 * day, lastWarnedAt: day, every: day))
+check("เปิดแอปช้า เตือนครั้งเดียวไม่ไล่เตือนย้อนหลัง", !Core.shouldWarnLongRun(elapsed: 30 * 3600, lastWarnedAt: 30 * 3600 - 5, every: day))
+check("every เป็น 0 ไม่เตือน", !Core.shouldWarnLongRun(elapsed: 100, lastWarnedAt: nil, every: 0))
+eq("ข้อความชั่วโมง", Core.longRunText(43200), "12 ชม.")
+eq("ข้อความเกินวัน", Core.longRunText(7 * 86400 + 3600), "7 วัน 1 ชม.")
+
 // ---------- สรุป ----------
 print("")
 print("ผ่าน \(passed) / \(passed + failed)")

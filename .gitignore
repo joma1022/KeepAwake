@@ -1,5 +1,4 @@
 .DS_Store
 *.dmg
 *.dmg.sha256
-*.pkg
 .build/
