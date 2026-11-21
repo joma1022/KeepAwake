@@ -5,6 +5,7 @@ import Cocoa
 import CoreGraphics
 import IOKit.pwr_mgt
 import IOKit.ps
+import ServiceManagement
 
 // ---------- อ่านสถานะแบตเตอรี่ ----------
 func batteryStatus() -> (onBattery: Bool, percent: Int)? {
@@ -329,7 +330,7 @@ final class PanelController: NSViewController, NSTextFieldDelegate {
     private func structureKey() -> String {
         [String(showingSettings), String(editingCustom), app.modeKey, String(app.effectiveScreenCanSleep),
          app.currentAccent.rawValue, app.updateTitle, String(app.isUpdating),
-         String(app.autoDimEnabled), String(app.lowBattEnabled)].joined(separator: "|")
+         String(app.autoDimEnabled), String(app.lowBattEnabled), String(app.launchAtLogin)].joined(separator: "|")
     }
 
     // ปุ่มที่กดอยู่อาจถูกแทนที่ระหว่างทำงาน จึงเลื่อนการสร้างใหม่ไปหลัง action จบ
@@ -546,6 +547,8 @@ final class PanelController: NSViewController, NSTextFieldDelegate {
                              enabled: Brightness.available, #selector(toggleDim(_:)))
         let batt = settingRow("หยุดเองเมื่อใช้แบตต่ำกว่า \(a.lowBattThreshold)%", on: a.lowBattEnabled,
                               enabled: true, #selector(toggleBatt(_:)))
+        let login = settingRow("เปิดเองตอนเข้าเครื่อง", on: a.launchAtLogin,
+                               enabled: true, #selector(toggleLogin(_:)))
 
         let upd = Chip(a.updateTitle, height: 26) { a.checkForUpdate() }
         upd.isEnabled = !a.isUpdating
@@ -560,7 +563,7 @@ final class PanelController: NSViewController, NSTextFieldDelegate {
         let quit = Chip("ออกจากโปรแกรม", height: 30) { NSApp.terminate(nil) }
         let colorTitle = panelLabel("สีธีม", size: 11.5, weight: .medium, color: .secondaryLabelColor, align: .left)
         let optTitle = panelLabel("พฤติกรรม", size: 11.5, weight: .medium, color: .secondaryLabelColor, align: .left)
-        let root = NSStackView(views: [head, colorTitle, colorRow, optTitle, dim, batt, flexibleSpace(), verRow, quit])
+        let root = NSStackView(views: [head, colorTitle, colorRow, optTitle, dim, batt, login, flexibleSpace(), verRow, quit])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 10
@@ -568,7 +571,7 @@ final class PanelController: NSViewController, NSTextFieldDelegate {
         root.setCustomSpacing(6, after: colorTitle)
         root.setCustomSpacing(18, after: colorRow)
         root.setCustomSpacing(6, after: optTitle)
-        for v in [head, colorRow, dim, batt, verRow, quit] as [NSView] {
+        for v in [head, colorRow, dim, batt, login, verRow, quit] as [NSView] {
             v.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         }
         return root
@@ -592,6 +595,10 @@ final class PanelController: NSViewController, NSTextFieldDelegate {
     }
     @objc private func toggleDim(_ s: NSSwitch) { app.setAutoDim(s.state == .on) }
     @objc private func toggleBatt(_ s: NSSwitch) { app.setLowBatt(s.state == .on) }
+    @objc private func toggleLogin(_ s: NSSwitch) {
+        app.setLaunchAtLogin(s.state == .on)
+        s.state = app.launchAtLogin ? .on : .off     // ถ้าระบบไม่ยอม สวิตช์ต้องกลับตามสถานะจริง
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
@@ -629,6 +636,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     let dimAfterSeconds: Double = 300      // ไม่แตะเครื่อง 5 นาที -> หรี่จอ
     let dimLevel: Float = 0.05             // ระดับหรี่ (5%)
 
+    // เปิดเองตอนเข้าเครื่อง: สถานะจริงอยู่ที่ระบบ (Login Items) ตรงนี้แค่สำเนาไว้แสดงผล
+    var launchAtLogin = false
     var updateTitle = "ตรวจสอบอัปเดต"
     var isUpdating = false
     var currentAccent: AccentChoice = .green
@@ -654,6 +663,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         autoDimEnabled = ud.bool(forKey: "autoDim")
         lowBattEnabled = ud.bool(forKey: "stopOnLowBatt")
         if autoDimEnabled { startTimer() }   // ให้เช็ค idle ตั้งแต่เปิดแอป
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    // ผู้ใช้อาจปิด/เปิดจาก System Settings > Login Items เอง จึงอ่านสถานะใหม่ทุกครั้งที่กลับมาที่แอป
+    func applicationDidBecomeActive(_ note: Notification) {
+        let now = SMAppService.mainApp.status == .enabled
+        if now != launchAtLogin { launchAtLogin = now; updateStatus() }
+    }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        let service = SMAppService.mainApp
+        var failure: String?
+        do {
+            if on { try service.register() } else { try service.unregister() }
+        } catch {
+            failure = error.localizedDescription
+        }
+        launchAtLogin = service.status == .enabled
+        updateStatus()
+        if on && service.status == .requiresApproval {
+            updateAlert("ต้องอนุญาตใน System Settings",
+                        "เปิด System Settings > General > Login Items แล้วเปิด KeepAwake ในรายการ",
+                        style: .warning)
+        } else if launchAtLogin != on {
+            updateAlert(on ? "ตั้งให้เปิดเองไม่สำเร็จ" : "ปิดการเปิดเองไม่สำเร็จ",
+                        failure ?? "ลองตั้งเองที่ System Settings > General > Login Items",
+                        style: .warning)
+        }
     }
 
     // ปิดหน้าต่างแล้ว "ไม่ปิดแอป" — ทำงานต่อเบื้องหลัง
